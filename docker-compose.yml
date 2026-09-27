@@ -1,0 +1,141 @@
+# GestorCitaCloudNative completo: frontend (nginx) + BFF + ms-catalogo + ms-usuarios + ms-citas.
+# Es el MISMO archivo en tu Mac y en la EC2.
+#
+# Puertos publicados en la máquina:
+#   80   -> frontend (React servido por nginx)      <- API Gateway: GET / y GET /{proxy+}
+#   8080 -> BFF (Spring Security, valida JWT)       <- API Gateway: ANY /api/{proxy+}
+# Los microservicios NO publican puertos: solo se alcanzan dentro de la red Docker.
+#
+# Persistencia: Oracle Autonomous Database (Oracle Cloud), 1 instancia con un
+# esquema por microservicio (CATALOGO, USUARIOS, CITAS). La conexión se define
+# en el .env (DB_URL + usuario/contraseña de cada esquema).
+#
+#   docker compose up -d --build                         -> usa la Autonomous DB del .env
+#   docker compose --profile oracle-local up -d --build  -> además levanta Oracle Free local
+#                                                           (DB_URL=jdbc:oracle:thin:@//oracle-local:1521/FREEPDB1)
+#
+# Límite de memoria por JVM: los 4 servicios caben en una EC2 de 4 GB (t3.medium).
+# En una instancia de 2 GB usa JAVA_XMX=256m en el .env.
+x-java-env: &java-env
+  JAVA_TOOL_OPTIONS: "-Xms64m -Xmx${JAVA_XMX:-384m} -XX:+UseSerialGC"
+  TZ: America/Santiago
+  DB_URL: ${DB_URL}
+  DB_POOL_SIZE: ${DB_POOL_SIZE:-4}
+
+# Wallet opcional (solo si la Autonomous DB exige mTLS). Ver infra/db/oracle/wallet/README.md
+x-wallet: &wallet
+  - ./infra/db/oracle/wallet:/opt/oracle/wallet:ro
+
+services:
+  # ------------------------------------------------------------------
+  # Oracle Database Free LOCAL (opcional, solo con --profile oracle-local).
+  # Réplica de los 3 esquemas de la Autonomous DB para desarrollo offline.
+  # ------------------------------------------------------------------
+  oracle-local:
+    image: gvenzl/oracle-free:23-slim
+    container_name: gestorcitas-oracle-local
+    profiles: ["oracle-local"]
+    restart: unless-stopped
+    environment:
+      ORACLE_PASSWORD: ${ORACLE_LOCAL_SYS_PASSWORD:-Oracle#Local2026}
+    ports:
+      - "127.0.0.1:1521:1521"   # SQL Developer / DBeaver desde tu Mac
+    volumes:
+      - oracle-data:/opt/oracle/oradata
+      - ./infra/db/oracle/local:/container-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    networks: [backend]
+
+  ms-catalogo:
+    build: ./ms-catalogo
+    container_name: gestorcitas-ms-catalogo
+    restart: unless-stopped   # reintenta si la base aún no responde
+    environment:
+      <<: *java-env
+      DB_USER: ${CATALOGO_DB_USER:-CATALOGO}
+      DB_PASSWORD: ${CATALOGO_DB_PASSWORD}
+    volumes: *wallet
+    expose: ["8083"]
+    networks: [backend]
+
+  ms-usuarios:
+    build: ./ms-usuarios
+    container_name: gestorcitas-ms-usuarios
+    restart: unless-stopped
+    environment:
+      <<: *java-env
+      DB_USER: ${USUARIOS_DB_USER:-USUARIOS}
+      DB_PASSWORD: ${USUARIOS_DB_PASSWORD}
+      CATALOGO_URL: ${CATALOGO_URL:-http://ms-catalogo:8083}
+      DEMO_MEDICO_EMAIL: ${DEMO_MEDICO_EMAIL}
+      APP_TIMEZONE: America/Santiago
+    volumes: *wallet
+    depends_on:
+      - ms-catalogo
+    expose: ["8084"]
+    networks: [backend]
+
+  ms-citas:
+    build: ./ms-citas
+    container_name: gestorcitas-ms-citas
+    restart: unless-stopped
+    environment:
+      <<: *java-env
+      DB_USER: ${CITAS_DB_USER:-CITAS}
+      DB_PASSWORD: ${CITAS_DB_PASSWORD}
+      USUARIOS_URL: ${USUARIOS_URL:-http://ms-usuarios:8084}
+      APP_TIMEZONE: America/Santiago
+    volumes: *wallet
+    depends_on:
+      - ms-usuarios
+    expose: ["8082"]
+    networks: [backend]
+
+  bff:
+    build: ./bff
+    container_name: gestorcitas-bff
+    restart: unless-stopped
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xms64m -Xmx${JAVA_XMX:-384m} -XX:+UseSerialGC"
+      TZ: America/Santiago
+      ENTRA_TENANT_ID: ${ENTRA_TENANT_ID}
+      ENTRA_API_CLIENT_ID: ${ENTRA_API_CLIENT_ID}
+      ENTRA_API_APP_ID_URI: ${ENTRA_API_APP_ID_URI}
+      ENTRA_REQUIRED_SCOPE: ${ENTRA_REQUIRED_SCOPE:-access_as_user}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
+      CATALOGO_URL: ${CATALOGO_URL:-http://ms-catalogo:8083}
+      CITAS_URL: ${CITAS_URL:-http://ms-citas:8082}
+      USUARIOS_URL: ${USUARIOS_URL:-http://ms-usuarios:8084}
+    depends_on:
+      - ms-catalogo
+      - ms-usuarios
+      - ms-citas
+    ports:
+      - "8080:8080"
+    networks: [backend]
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_ENTRA_CLIENT_ID: ${FRONT_CLIENT_ID}
+        VITE_ENTRA_TENANT_ID: ${ENTRA_TENANT_ID}
+        VITE_API_SCOPE: ${API_SCOPE:-api://gestorcitas-api/access_as_user}
+    container_name: gestorcitas-frontend
+    restart: unless-stopped
+    depends_on:
+      - bff
+    ports:
+      - "80:80"
+    networks: [backend]
+
+networks:
+  backend:
+
+volumes:
+  oracle-data:

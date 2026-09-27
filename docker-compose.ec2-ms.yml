@@ -1,0 +1,49 @@
+# =====================================================================
+# EC2-B  gestorcitas-ms  (IP privada en MS_HOST del BFF)
+# Levanta los 3 microservicios. Solo el BFF (EC2-A) los alcanza:
+# el Security Group gestorcitas-ms-sg abre 8082-8084 únicamente a gestorcitas-sg.
+#
+#   docker compose -f docker-compose.ec2-ms.yml up -d --build
+# =====================================================================
+x-java-env: &java-env
+  JAVA_TOOL_OPTIONS: "-Xms64m -Xmx${JAVA_XMX:-384m} -XX:+UseSerialGC"
+  TZ: America/Santiago
+  APP_TIMEZONE: America/Santiago
+  DB_URL: ${DB_URL}
+  DB_POOL_SIZE: ${DB_POOL_SIZE:-4}
+
+services:
+  ms-catalogo:
+    build: ./ms-catalogo
+    container_name: gestorcitas-ms-catalogo
+    restart: unless-stopped
+    environment:
+      <<: *java-env
+      DB_USER: ${CATALOGO_DB_USER:-CATALOGO}
+      DB_PASSWORD: ${CATALOGO_DB_PASSWORD}
+    ports: ["8083:8083"]
+
+  ms-usuarios:
+    build: ./ms-usuarios
+    container_name: gestorcitas-ms-usuarios
+    restart: unless-stopped
+    environment:
+      <<: *java-env
+      DB_USER: ${USUARIOS_DB_USER:-USUARIOS}
+      DB_PASSWORD: ${USUARIOS_DB_PASSWORD}
+      CATALOGO_URL: http://ms-catalogo:8083
+      DEMO_MEDICO_EMAIL: ${DEMO_MEDICO_EMAIL}
+    depends_on: [ms-catalogo]
+    ports: ["8084:8084"]
+
+  ms-citas:
+    build: ./ms-citas
+    container_name: gestorcitas-ms-citas
+    restart: unless-stopped
+    environment:
+      <<: *java-env
+      DB_USER: ${CITAS_DB_USER:-CITAS}
+      DB_PASSWORD: ${CITAS_DB_PASSWORD}
+      USUARIOS_URL: http://ms-usuarios:8084
+    depends_on: [ms-usuarios]
+    ports: ["8082:8082"]

@@ -1,0 +1,12 @@
+.env
+target/
+node_modules/
+dist/
+.idea/
+*.iml
+.vscode/
+.DS_Store
+# Wallet de Oracle (credenciales)
+infra/db/oracle/wallet/*
+!infra/db/oracle/wallet/README.md
+frontend/

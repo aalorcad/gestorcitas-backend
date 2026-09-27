@@ -1,0 +1,41 @@
+server:
+  port: ${SERVER_PORT:8082}
+
+spring:
+  application:
+    name: ms-citas
+  # Oracle Autonomous Database: 1 instancia, 1 esquema por microservicio (CITAS).
+  # DB_URL = cadena de conexión TLS de la ADB (o jdbc:oracle:thin:@//localhost:1521/FREEPDB1 en local).
+  datasource:
+    url: ${DB_URL:jdbc:oracle:thin:@//localhost:1521/FREEPDB1}
+    username: ${DB_USER:citas}
+    password: ${DB_PASSWORD}
+    hikari:
+      # Always Free admite pocas sesiones simultáneas: 3 servicios x 4 conexiones
+      maximum-pool-size: ${DB_POOL_SIZE:4}
+      minimum-idle: 1
+      connection-timeout: 30000
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+
+app:
+  zona-horaria: ${APP_TIMEZONE:America/Santiago}
+  services:
+    usuarios-url: ${USUARIOS_URL:http://localhost:8084}
+  agenda:
+    hora-inicio: "08:00"
+    hora-fin: "18:00"
+    duracion-minutos: 30
+    dias-habiles: MONDAY,TUESDAY,WEDNESDAY,THURSDAY,FRIDAY
+    max-citas-activas-por-especialidad: 1
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

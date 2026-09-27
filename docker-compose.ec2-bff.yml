@@ -1,0 +1,24 @@
+# =====================================================================
+# EC2-A  gestorcitas-bff  (IP elástica pública)
+# Levanta solo el BFF. API Gateway le envía ANY /api/{proxy+} al puerto 8080.
+# El BFF llama a los microservicios de EC2-B por su IP PRIVADA (MS_HOST en el .env).
+#
+#   docker compose -f docker-compose.ec2-bff.yml up -d --build
+# =====================================================================
+services:
+  bff:
+    build: ./bff
+    container_name: gestorcitas-bff
+    restart: unless-stopped
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xms64m -Xmx${JAVA_XMX:-384m} -XX:+UseSerialGC"
+      TZ: America/Santiago
+      ENTRA_TENANT_ID: ${ENTRA_TENANT_ID}
+      ENTRA_API_CLIENT_ID: ${ENTRA_API_CLIENT_ID}
+      ENTRA_API_APP_ID_URI: ${ENTRA_API_APP_ID_URI}
+      ENTRA_REQUIRED_SCOPE: ${ENTRA_REQUIRED_SCOPE:-access_as_user}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
+      CATALOGO_URL: http://${MS_HOST:?Define MS_HOST (IP privada de EC2-B)}:8083
+      USUARIOS_URL: http://${MS_HOST}:8084
+      CITAS_URL: http://${MS_HOST}:8082
+    ports: ["8080:8080"]
