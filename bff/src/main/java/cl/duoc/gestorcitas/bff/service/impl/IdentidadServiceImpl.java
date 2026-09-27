@@ -1,7 +1,9 @@
 package cl.duoc.gestorcitas.bff.service.impl;
 
+import cl.duoc.gestorcitas.bff.config.EntraIdProperties;
 import cl.duoc.gestorcitas.bff.dto.PerfilResponse;
 import cl.duoc.gestorcitas.bff.dto.UsuarioAutenticado;
+import cl.duoc.gestorcitas.bff.security.EntraRoles;
 import cl.duoc.gestorcitas.bff.service.IdentidadService;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
@@ -13,6 +15,12 @@ import java.util.Locale;
 @Service
 public class IdentidadServiceImpl implements IdentidadService {
 
+    private final EntraIdProperties entra;
+
+    public IdentidadServiceImpl(EntraIdProperties entra) {
+        this.entra = entra;
+    }
+
     @Override
     public UsuarioAutenticado desdeToken(Jwt jwt) {
         // "oid" identifica al usuario de forma estable en el tenant; "sub" es por aplicación.
@@ -22,12 +30,12 @@ public class IdentidadServiceImpl implements IdentidadService {
                 jwt.getClaimAsString("preferred_username"),
                 jwt.getClaimAsString("upn"));
         String nombre = firstNonBlank(jwt.getClaimAsString("name"), email);
-        List<String> roles = jwt.getClaimAsStringList("roles");
+        List<String> roles = EntraRoles.de(jwt, entra.defaultRole());
         return new UsuarioAutenticado(
                 id,
                 nombre,
                 email == null ? null : email.toLowerCase(Locale.ROOT),
-                roles == null ? List.of() : roles);
+                roles);
     }
 
     @Override

@@ -40,7 +40,8 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
-                                                   ObjectMapper objectMapper) throws Exception {
+                                                   ObjectMapper objectMapper,
+                                                   EntraIdProperties entra) throws Exception {
         RestAuthenticationEntryPoint errorHandler = new RestAuthenticationEntryPoint(objectMapper);
 
         http
@@ -82,7 +83,7 @@ public class SecurityConfig {
                         .anyRequest().denyAll()
                 )
                 .oauth2ResourceServer(oauth -> oauth
-                        .jwt(jwt -> jwt.jwtAuthenticationConverter(new EntraRolesConverter()))
+                        .jwt(jwt -> jwt.jwtAuthenticationConverter(new EntraRolesConverter(entra.defaultRole())))
                         .authenticationEntryPoint(errorHandler)
                         .accessDeniedHandler(errorHandler)
                 )
@@ -95,7 +96,7 @@ public class SecurityConfig {
 
     @Bean
     public JwtDecoder jwtDecoder(EntraIdProperties entra) {
-        NimbusJwtDecoder decoder = NimbusJwtDecoder.withJwkSetUri(entra.jwkSetUri()).build();
+        NimbusJwtDecoder decoder = NimbusJwtDecoder.withJwkSetUri(entra.jwks()).build();
 
         OAuth2TokenValidator<Jwt> validator = new DelegatingOAuth2TokenValidator<>(
                 JwtValidators.createDefaultWithIssuer(entra.issuer()),   // firma + exp/nbf + iss

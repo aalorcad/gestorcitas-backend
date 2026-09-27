@@ -88,7 +88,7 @@ GestorCitaCloudNative/
 ├── infra/
 │   ├── db/oracle/     Scripts de esquemas para Autonomous DB (adb/) y Oracle local (local/)
 │   └── aws/           Script API Gateway + user-data EC2
-├── docs/              00-guia-paso-a-paso.md · 01-entra-id.md · 03-oracle-autonomous-db.md · 04-despliegue-ec2.md
+├── docs/              00-guia-paso-a-paso.md · 01-entra-id.md · 01b-entra-external-id.md · 03-oracle-autonomous-db.md · 04-despliegue-ec2.md
 ├── docker-compose.yml
 ├── mvnw               Maven Wrapper (no requiere Maven instalado)
 └── pom.xml            Agregador Maven
@@ -170,7 +170,7 @@ Guards en cadena (`app/router.tsx`): **AuthGuard** (sesión Entra ID) → **Usua
 
 Requisitos: **Java 17+**, Node 20+, Docker. No necesitas Maven: usa `./mvnw`.
 
-1. Configura Entra ID siguiendo **[docs/01-entra-id.md](docs/01-entra-id.md)**.
+1. Configura Entra ID siguiendo **[docs/01-entra-id.md](docs/01-entra-id.md)**. Para que los pacientes **creen su cuenta** desde el frontend usa Entra External ID: **[docs/01b-entra-external-id.md](docs/01b-entra-external-id.md)**.
 2. Crea la Autonomous Database y sus 3 esquemas siguiendo **[docs/03-oracle-autonomous-db.md](docs/03-oracle-autonomous-db.md)**.
 3. Backend:
    ```bash
@@ -196,6 +196,11 @@ Requisitos: **Java 17+**, Node 20+, Docker. No necesitas Maven: usa `./mvnw`.
 - **Pacientes y admins:** se crean solos en su primer login, según el App Role asignado.
 
 ## Tests
+
+**Evidencia de rutas (Postman):** `infra/postman/GestorCitas.postman_collection.json` prueba las 25 rutas de API Gateway
+con y sin token: 401 (sin token o token inválido, API Gateway), 200/201/204 (JSON de los microservicios),
+403 (rol no permitido, BFF) y 404 (ruta no publicada). Instrucciones en la descripción de la colección.
+
 
 ```bash
 ./mvnw clean test          # reglas de negocio (Mockito), contexto JPA (H2) y seguridad del BFF (MockMvc)

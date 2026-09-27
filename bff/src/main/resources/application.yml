@@ -19,6 +19,11 @@ app:
         - ${ENTRA_API_CLIENT_ID:00000000-0000-0000-0000-000000000000}
         - ${ENTRA_API_APP_ID_URI:api://gestorcitas-api}
       required-scope: ${ENTRA_REQUIRED_SCOPE:access_as_user}
+      # Solo Entra External ID (vacío = tenant workforce, se derivan del Tenant ID)
+      issuer-uri: ${ENTRA_ISSUER:}
+      jwk-set-uri: ${ENTRA_JWKS_URI:}
+      # Rol para usuarios autenticados sin App Roles (autoregistro). Vacío = sin rol.
+      default-role: ${ENTRA_DEFAULT_ROLE:}
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
   services:
