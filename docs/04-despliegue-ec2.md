@@ -1,282 +1,135 @@
-# 4. Despliegue en AWS: frontend, BFF y microservicios en EC2
+# 4. Despliegue en AWS: BFF en EC2-A y microservicios en EC2-B
+
+El frontend corre **local** (`npm run dev`) y consume la API por AWS API Gateway, que es el único punto público.
+Ambas EC2 clonan el mismo repositorio `gestorcitas-backend` y cada una levanta solo su parte.
 
 ## 4.1 Qué corre dónde
 
 ```
-                               Internet (solo HTTPS)
-  Navegador ─────────────► https://abc123.execute-api.us-east-1.amazonaws.com
-                           ┌──────────────────────────────────────────────────┐
-                           │ AWS API Gateway (HTTP API) · único punto público │
-                           │                                                  │
-                           │  GET /  y  GET /{proxy+}      ANY /api/{proxy+}   │
-                           │  (sin autorizador)            + autorizador JWT   │
-                           │                               (1ª validación)     │
-                           │                               OPTIONS /api/...    │
-                           └──────────┬──────────────────────────┬────────────┘
-                                      │ HTTP :80                 │ HTTP :8080
-                  ┌───────────────────▼──────────────────────────▼───────────────┐
-                  │ EC2 · Amazon Linux 2023 · Docker Compose                     │
-                  │                                                              │
-                  │  ┌──────────────────┐        ┌───────────────────────────┐   │
-                  │  │ frontend         │        │ bff                       │   │
-                  │  │ React + nginx    │        │ Spring Security           │   │
-                  │  │ :80              │        │ 2ª validación JWT · :8080 │   │
-                  │  └──────────────────┘        └──────┬──────────┬─────────┘   │
-                  │                    red interna Docker│          │             │
-                  │  ┌─────────────┐  ┌──────────────┐  ┌▼──────────▼──┐          │
-                  │  │ ms-catalogo │◄─│ ms-usuarios  │◄─│ ms-citas     │          │
-                  │  │ :8083       │  │ :8084        │  │ :8082        │          │
-                  │  └──────┬──────┘  └──────┬───────┘  └──────┬───────┘          │
-                  └─────────┼────────────────┼─────────────────┼──────────────────┘
-                            └──────── TLS :1521 ───────────────┘
-                                             ▼
-                      Oracle Autonomous Database (Oracle Cloud)
-                      esquemas CATALOGO · USUARIOS · CITAS
+ Frontend local (http://localhost:5173)
+        │ HTTPS + Bearer JWT
+        ▼
+ AWS API Gateway (HTTP API)
+   25 rutas /api/... con autorizador JWT (1ª validación) + OPTIONS para CORS
+        │ HTTP :8080
+        ▼
+ EC2-A  gestorcitas-bff   (IP elástica)          docker-compose.ec2-bff.yml
+   BFF · Spring Security (2ª validación + roles)
+        │ HTTP :8082-8084 por IP PRIVADA (MS_HOST)
+        ▼
+ EC2-B  gestorcitas-ms    (IP elástica + IP privada)   docker-compose.ec2-ms.yml
+   ms-citas :8082 · ms-catalogo :8083 · ms-usuarios :8084
+        │ TLS :1521
+        ▼
+ Oracle Autonomous Database (ACL: IP elástica de EC2-B)
 ```
 
-| Componente | Dónde corre | Contenedor / puerto | ¿Accesible desde Internet? |
-|---|---|---|---|
-| Frontend React | EC2 | `frontend` (nginx) · 80 | Solo a través de API Gateway (`GET /…`) |
-| BFF | EC2 | `bff` · 8080 | Solo a través de API Gateway (`/api/…`, con JWT) |
-| ms-citas | EC2 | `ms-citas` · 8082 | **No** (solo la red interna de Docker) |
-| ms-usuarios | EC2 | `ms-usuarios` · 8084 | **No** |
-| ms-catalogo | EC2 | `ms-catalogo` · 8083 | **No** |
-| Base de datos | Oracle Cloud | Autonomous DB · 1521 (TLS) | Solo desde las IP autorizadas (EC2 y tu Mac) |
-| Identidad | Microsoft | Entra ID | Login de Microsoft |
-
-**Por qué así:**
-- **Entra ID exige HTTPS** en la dirección de retorno del login (salvo `localhost`). API Gateway entrega HTTPS con su propia URL, sin comprar dominio ni configurar certificados.
-- **Un solo punto de entrada:** el usuario abre la URL de API Gateway y desde ahí carga la aplicación y llama a la API. Como el frontend y la API comparten dominio, el navegador no necesita CORS; igual se deja configurado para desarrollo y porque lo pide el alcance.
-- **Una sola EC2 con Docker Compose:** cada servicio es un contenedor independiente (imagen, proceso y puerto propios), pero se levantan todos con un solo comando. Es lo más simple de operar en AWS Academy. Si el profesor exige una instancia por servicio, está en el anexo 4.10.
-
-**Flujo de una acción (por ejemplo, un paciente reserva una hora):**
-
-1. El navegador abre `https://…amazonaws.com/`. API Gateway reenvía `GET /` a nginx (EC2:80), que entrega la app React.
-2. La app redirige al login de Microsoft. Entra ID devuelve el access token a `https://…amazonaws.com/`.
-3. La app llama `POST https://…amazonaws.com/api/citas` con `Authorization: Bearer <token>` (MsalInterceptor).
-4. API Gateway valida el JWT (firma, `iss`, `aud`, `exp`, `scp`). Si no es válido responde 401 y la solicitud no llega a la EC2.
-5. API Gateway reenvía la solicitud al BFF (EC2:8080), que **vuelve a validar el JWT** y comprueba que el rol sea Paciente.
-6. El BFF llama a ms-citas (`http://ms-citas:8082`, red interna) con la identidad del usuario.
-7. ms-citas consulta a ms-usuarios que el paciente y el médico estén habilitados, y guarda la cita en el esquema `CITAS` de Oracle.
-8. La respuesta vuelve por el mismo camino hasta el navegador.
-
----
-
-## 4.2 Antes de empezar (checklist)
-
-- [ ] Entra ID configurado: usuarios, `gestorcitas-api` con roles y scope, y `gestorcitas-frontend` (Fase 1 de la guía).
-- [ ] Oracle Autonomous DB creada, con los 3 esquemas (`docs/03-oracle-autonomous-db.md`).
-- [ ] La aplicación funciona **en local** con `docker compose up -d --build` en http://localhost (Fase 2).
-- [ ] El código está en GitHub.
-- [ ] Tienes tu `.env` de la raíz funcionando en local (lo vas a copiar a la EC2).
-
----
-
-## 4.3 Paso 1 · Crear la EC2
-
-**Key pair:** EC2 → *Key Pairs* → **Create key pair** → nombre `gestorcitas-key`, tipo RSA, formato `.pem`.
-
-```bash
-mv ~/Downloads/gestorcitas-key.pem ~/.ssh/ && chmod 400 ~/.ssh/gestorcitas-key.pem
-```
-
-**Security Group:** EC2 → *Security Groups* → **Create** → nombre `gestorcitas-sg`:
-
-| Tipo | Puerto | Origen | Para qué |
-|---|---|---|---|
-| SSH | 22 | **My IP** | Administrar la instancia |
-| HTTP | 80 | `0.0.0.0/0` | API Gateway → frontend |
-| Custom TCP | 8080 | `0.0.0.0/0` | API Gateway → BFF |
-
-> API Gateway no tiene IP fija, por eso 80 y 8080 quedan abiertos. El frontend es contenido público, y el BFF rechaza con 401 cualquier llamada sin un JWT válido de Entra ID. Los microservicios (8082–8084) **no** se abren.
-
-**Instancia:** EC2 → **Launch instance**
-
-| Campo | Valor |
+| Recurso | Valor |
 |---|---|
-| Name | `gestorcitas` |
-| AMI | **Amazon Linux 2023** (64-bit x86) |
-| Instance type | **t3.medium** (4 GB; con t3.small pon `JAVA_XMX=256m`) |
-| Key pair | `gestorcitas-key` |
-| Security group | `gestorcitas-sg` |
-| Storage | **20 GiB** gp3 |
-| Advanced → User data | contenido de `infra/aws/ec2-user-data.sh` (instala Docker, Docker Compose y git) |
+| Región | us-east-1 (Learner Lab) |
+| AMI / tipo | Amazon Linux 2023 · t3.medium |
+| Par de llaves | `gestorcitas-key` (`~/.ssh/gestorcitas-key.pem`, `chmod 400`) |
+| User data | [`infra/aws/ec2-user-data.sh`](../infra/aws/ec2-user-data.sh) (Docker, Compose y Buildx) |
 
-**Launch instance** y espera a que el estado sea *Running* y los *Status checks* digan *2/2 checks passed*.
+## 4.2 Security Groups
 
-## 4.4 Paso 2 · IP fija y permiso en Oracle
+| SG | Instancia | Reglas de entrada |
+|---|---|---|
+| `gestorcitas-sg` | EC2-A (BFF) | SSH 22 desde *Mi IP* · TCP 8080 desde 0.0.0.0/0 (API Gateway llama por internet; sin token el BFF responde 401) |
+| `gestorcitas-ms-sg` | EC2-B (microservicios) | SSH 22 desde *Mi IP* · TCP 8082-8084 **solo** desde el SG `gestorcitas-sg` |
 
-1. EC2 → **Elastic IPs** → **Allocate Elastic IP address** → **Allocate**.
-2. Selecciónala → **Actions → Associate Elastic IP address** → instancia `gestorcitas` → **Associate**.
-3. Anota:
-   - `EC2_IP`, por ejemplo `3.90.12.34`
-   - `EC2_HOST`, el *Public IPv4 DNS*, por ejemplo `ec2-3-90-12-34.compute-1.amazonaws.com`
-4. **Oracle Cloud** → tu Autonomous Database → **Network → Access control list → Edit** → agrega `EC2_IP` → **Save**.
+> En otra red (por ejemplo la sala de clases) edita la regla SSH y vuelve a elegir *Mi IP*.
 
-> La Elastic IP no cambia aunque se reinicie la instancia o el Learner Lab. Sin ella tendrías que actualizar API Gateway y Oracle cada vez.
+## 4.3 Crear las instancias
 
-## 4.5 Paso 3 · Llevar el código y la configuración a la EC2
+1. **EC2 → Lanzar instancia** (una vez por instancia): nombre `gestorcitas-bff` / `gestorcitas-ms`, Amazon Linux 2023, t3.medium, par `gestorcitas-key`, SG correspondiente, y en **Detalles avanzados → Datos de usuario** el contenido de `infra/aws/ec2-user-data.sh`.
+2. **Direcciones IP elásticas → Asignar** (una por instancia) → **Asociar** a su instancia. No se liberan: API Gateway y la ACL de Oracle dependen de ellas.
+3. Anota la **IP privada** de EC2-B (`172.31.x.x`): va en `MS_HOST` del `.env`.
+4. En Oracle Cloud agrega la IP elástica de **EC2-B** a la ACL de la Autonomous Database.
+
+Comprobar Docker en cada instancia:
 
 ```bash
-ssh -i ~/.ssh/gestorcitas-key.pem ec2-user@<EC2_IP>
-docker --version && docker compose version && git --version   # lo instaló el user data
+ssh -i ~/.ssh/gestorcitas-key.pem ec2-user@<IP-elástica>
+docker --version && docker compose version && docker buildx version
 ```
 
-Si `docker` responde *permission denied*, sal (`exit`) y vuelve a entrar.
+## 4.4 Desplegar EC2-B (microservicios)
 
-**Clonar el repositorio.** Como es privado, GitHub pide un token:
-
-1. En GitHub → *Settings* → *Developer settings* → *Personal access tokens* → **Fine-grained tokens** → **Generate new token**.
-2. *Repository access*: solo `GestorCitaCloudNative`. *Permissions → Contents*: **Read-only**.
-3. En la EC2:
+Desde tu Mac copia el `.env` (nunca va a GitHub) y entra:
 
 ```bash
-git clone https://<tu-usuario>:<TOKEN>@github.com/<tu-usuario>/GestorCitaCloudNative.git
-cd GestorCitaCloudNative
+scp -i ~/.ssh/gestorcitas-key.pem .env ec2-user@<IP-EC2-B>:~/
+ssh -i ~/.ssh/gestorcitas-key.pem ec2-user@<IP-EC2-B>
 ```
 
-**Copiar el `.env`.** Desde otra terminal en tu Mac, así no tienes que escribirlo a mano:
+En EC2-B:
 
 ```bash
-scp -i ~/.ssh/gestorcitas-key.pem ~/IdeaProjects/GestorCitaCloudNative/.env \
-    ec2-user@<EC2_IP>:~/GestorCitaCloudNative/.env
+git clone https://github.com/aalorcad/gestorcitas-backend.git
+mv ~/.env gestorcitas-backend/ && cd gestorcitas-backend
+docker compose -f docker-compose.ec2-ms.yml up -d --build
+curl -s localhost:8083/especialidades      # JSON de especialidades desde Oracle
 ```
 
-El `.env` contiene la conexión a Oracle, las contraseñas de los esquemas y los IDs de Entra ID. No está en GitHub, por eso se copia aparte.
+## 4.5 Desplegar EC2-A (BFF)
 
-## 4.6 Paso 4 · Levantar los 5 contenedores
-
-En la EC2:
+El `.env` debe tener `MS_HOST=<IP privada de EC2-B>`.
 
 ```bash
-cd ~/GestorCitaCloudNative
-docker compose up -d --build          # la primera vez: 8–12 min (compila Java y React)
-docker compose ps                     # 5 servicios en estado "running"
+scp -i ~/.ssh/gestorcitas-key.pem .env ec2-user@<IP-EC2-A>:~/
+ssh -i ~/.ssh/gestorcitas-key.pem ec2-user@<IP-EC2-A>
+git clone https://github.com/aalorcad/gestorcitas-backend.git
+mv ~/.env gestorcitas-backend/ && cd gestorcitas-backend
+curl -s <IP-privada-EC2-B>:8083/especialidades   # verifica el Security Group
+docker compose -f docker-compose.ec2-bff.yml up -d --build
+curl -i localhost:8080/api/me                     # 401: Spring Security exige token
 ```
 
-Verificación **dentro de la EC2**:
+## 4.6 API Gateway
+
+En **AWS CloudShell** (ícono `>_` de la consola, región us-east-1):
 
 ```bash
-curl -s  http://localhost/ | head -5                   # HTML de la app (frontend OK)
-curl -s  http://localhost:8080/actuator/health         # {"status":"UP"}  (BFF OK)
-curl -si http://localhost:8080/api/citas/mias | head -1   # HTTP/1.1 401    (BFF exige token)
-docker compose logs ms-usuarios | grep -i "started\|médicos"   # conectó a Oracle y cargó datos
-```
-
-Si un microservicio queda reiniciándose, revisa `docker compose logs <servicio>`. Lo más común es que falte la IP de la EC2 en la lista de acceso de Oracle (paso 2).
-
-## 4.7 Paso 5 · Crear API Gateway
-
-### Opción A — Script (recomendado)
-
-En tu **Mac**, con la AWS CLI. En Learner Lab: *AWS Details → AWS CLI → Show* y copia el bloque en `~/.aws/credentials`.
-
-```bash
-cd ~/IdeaProjects/GestorCitaCloudNative
+git clone https://github.com/aalorcad/gestorcitas-backend.git && cd gestorcitas-backend
 export AWS_REGION=us-east-1
-export ENTRA_TENANT_ID=<TENANT_ID>
-export ENTRA_API_CLIENT_ID=<API_CLIENT_ID>
-export EC2_HOST=<EC2_HOST>
-./infra/aws/api-gateway.sh
+export ENTRA_TENANT_ID=<tenant-id>
+export ENTRA_API_CLIENT_ID=<client-id de gestorcitas-api>
+export BFF_HOST=ec2-<IP-EC2-A-con-guiones>.compute-1.amazonaws.com
+# export API_ID=<id>   # para reutilizar una API existente y conservar su URL
+bash infra/aws/api-gateway.sh
 ```
 
-Al terminar muestra la URL de la aplicación (`https://abc123.execute-api.us-east-1.amazonaws.com`) y los dos pasos que faltan.
+El script crea (o reemplaza) el autorizador JWT (issuer + audience + scope `access_as_user`), la integración
+con el BFF, las 25 rutas protegidas, la ruta `OPTIONS` y el CORS para `http://localhost:5173`.
 
-### Opción B — Consola
+Luego, en tu Mac, `frontend/.env` → `VITE_API_BASE_URL=<URL de API Gateway>` y `npm run dev`.
 
-1. **API Gateway → Create API → HTTP API → Build** → nombre `gestorcitas-http-api` → *Next* → no agregues rutas → *Next* → stage `$default` con **Auto-deploy** → **Create**.
-2. **Integrations → Manage integrations → Create**, 3 veces (tipo **HTTP URI**):
+Verificación:
 
-   | Integración | Método | URL |
-   |---|---|---|
-   | bff | ANY | `http://<EC2_HOST>:8080/api/{proxy}` |
-   | frontend-root | GET | `http://<EC2_HOST>:80/` |
-   | frontend | GET | `http://<EC2_HOST>:80/{proxy}` |
+```bash
+curl -i <URL>/api/me          # 401 (sin token)
+curl -i <URL>/api/no-existe   # 404 (ruta no publicada)
+```
 
-3. **Routes → Create**, 4 veces, y en cada ruta **Attach integration**:
+Evidencia completa con token: colección Postman `infra/postman/GestorCitas.postman_collection.json`.
 
-   | Ruta | Integración | Autorización |
-   |---|---|---|
-   | `ANY /api/{proxy+}` | bff | JWT (paso 4) |
-   | `OPTIONS /api/{proxy+}` | bff | ninguna |
-   | `GET /` | frontend-root | ninguna |
-   | `GET /{proxy+}` | frontend | ninguna |
+## 4.7 Actualizar después de un cambio
 
-   > API Gateway siempre elige la ruta más específica: `GET /api/citas` va a `/api/{proxy+}` (BFF), y `GET /paciente/reservar` va a `/{proxy+}` (frontend).
+```bash
+# Mac
+git push
+# EC2-A (BFF) o EC2-B (microservicios)
+cd ~/gestorcitas-backend && git pull
+docker compose -f docker-compose.ec2-bff.yml build --no-cache bff     # en EC2-A
+docker compose -f docker-compose.ec2-bff.yml up -d --force-recreate
+docker compose -f docker-compose.ec2-ms.yml up -d --build            # en EC2-B
+```
 
-4. **Authorization** → selecciona `ANY /api/{proxy+}` → **Create and attach an authorizer**:
-   - Type **JWT** · Name `entra-id-jwt` · Identity source `$request.header.Authorization`
-   - Issuer `https://login.microsoftonline.com/<TENANT_ID>/v2.0`
-   - Audience `<API_CLIENT_ID>`
-   - Guarda. En la ruta, *Authorization scopes* → `access_as_user`.
-5. **CORS → Configure**:
-   - Allow origins: `https://<tu-api>.execute-api.us-east-1.amazonaws.com`, `http://localhost:5173`, `http://localhost`
-   - Allow headers: `authorization, content-type`
-   - Allow methods: `GET, POST, PUT, PATCH, DELETE, OPTIONS`
-   - Max age `3600`
-6. Copia la **Invoke URL** del stage `$default`: esa es la URL de la aplicación.
+Logs: `docker logs --tail 40 gestorcitas-bff` (EC2-A) · `docker logs --tail 40 gestorcitas-ms-citas` (EC2-B).
 
-## 4.8 Paso 6 · Conectar Entra ID y el BFF con la URL pública
+## 4.8 Detener y volver a iniciar (Learner Lab)
 
-1. **Entra ID → App registrations → gestorcitas-frontend → Authentication → Single-page application → Add URI**:
-   - `https://abc123.execute-api.us-east-1.amazonaws.com`
-   - `https://abc123.execute-api.us-east-1.amazonaws.com/login`
-   - **Save**
-2. **En la EC2**, en `.env`:
-
-   ```env
-   CORS_ALLOWED_ORIGINS=http://localhost:5173,http://localhost,https://abc123.execute-api.us-east-1.amazonaws.com
-   ```
-
-   y aplica con `docker compose up -d bff`.
-
-No hay que recompilar el frontend: toma la URL de la API y la del login del dominio desde donde se abre.
-
-## 4.9 Paso 7 · Probar (evidencias para la evaluación)
-
-Abre `https://abc123.execute-api.us-east-1.amazonaws.com` e inicia sesión con cada integrante:
-
-| Evidencia | Cómo mostrarla |
-|---|---|
-| Login y logout con MSAL | Botón "Iniciar sesión con Microsoft" y "Cerrar sesión" |
-| Guards | Sin sesión, `…/admin` redirige a `/login`; Cesar (Paciente) en `…/admin` ve "Acceso no autorizado" |
-| MsalInterceptor | DevTools → Network → cualquier `/api/…` lleva `Authorization: Bearer …` |
-| 1ª validación (API Gateway) | `curl -i https://…amazonaws.com/api/citas/mias` → **401** `{"message":"Unauthorized"}` |
-| CORS y OPTIONS | `curl -i -X OPTIONS https://…/api/citas/mias -H "Origin: http://localhost:5173" -H "Access-Control-Request-Method: GET"` → 204 con cabeceras `access-control-allow-*` |
-| 2ª validación (BFF) | `curl -i http://<EC2_IP>:8080/api/citas/mias` → **401** del BFF; token de Cesar contra `GET /api/usuarios` → **403** |
-| Pantallas por actor | Cesar: reservar y mis citas · Elian: agenda y atender · Aaron: panel, usuarios, especialidades y citas |
-| Persistencia en Oracle | En Oracle Database Actions, ejecuta `infra/db/oracle/adb/02-verificar-datos.sql` |
-| Microservicios no expuestos | `curl --max-time 5 http://<EC2_IP>:8082` → sin respuesta (timeout) |
-
----
-
-## Operación diaria
-
-| Tarea | Comando (en la EC2, carpeta del proyecto) |
-|---|---|
-| Ver estado | `docker compose ps` |
-| Ver logs de un servicio | `docker compose logs -f bff` |
-| Actualizar tras un cambio en GitHub | `git pull && docker compose up -d --build` |
-| Actualizar solo un servicio | `git pull && docker compose up -d --build ms-citas` |
-| Reiniciar todo | `docker compose restart` |
-| Apagar | `docker compose down` |
-
-**AWS Academy Learner Lab:** al terminar la sesión la EC2 se apaga. Al volver: *Start Lab* → la EC2 enciende sola → los contenedores arrancan solos (`restart: unless-stopped`). La Elastic IP y API Gateway siguen iguales. Si la Autonomous DB lleva 7 días sin uso, enciéndela en Oracle Cloud con **Start**.
-
----
-
-## 4.10 Anexo · Variante "una EC2 por servicio"
-
-Solo si la pauta lo exige. Se usa el mismo repositorio y el mismo `docker-compose.yml`; cambian el `.env` y el comando de cada instancia.
-
-| Instancia | Comando | Variables extra en su `.env` | Puertos en su Security Group |
-|---|---|---|---|
-| `gc-frontend` | `docker compose up -d --build --no-deps frontend` | — | 80 desde 0.0.0.0/0 |
-| `gc-bff` | `docker compose up -d --build --no-deps bff` | `CITAS_URL=http://<IP privada ms-citas>:8082`<br>`USUARIOS_URL=http://<IP privada ms-usuarios>:8084`<br>`CATALOGO_URL=http://<IP privada ms-catalogo>:8083` | 8080 desde 0.0.0.0/0 |
-| `gc-ms-citas` | `docker compose -f docker-compose.yml -f infra/aws/docker-compose.multi-ec2.yml up -d --build --no-deps ms-citas` | `USUARIOS_URL=http://<IP privada ms-usuarios>:8084` | 8082 solo desde el SG del BFF |
-| `gc-ms-usuarios` | igual, con `ms-usuarios` | `CATALOGO_URL=http://<IP privada ms-catalogo>:8083` | 8084 desde los SG del BFF y de ms-citas |
-| `gc-ms-catalogo` | igual, con `ms-catalogo` | — | 8083 desde los SG del BFF y de ms-usuarios |
-
-- API Gateway: la integración del frontend apunta a `gc-frontend` y la del BFF a `gc-bff`.
-- Las IP de las tres instancias de microservicios deben estar en la lista de acceso de Oracle.
-- Con 5 instancias t3.small, usa `JAVA_XMX=256m`.
+- **Detener:** EC2 → selecciona ambas → *Estado de la instancia → Detener*. Nunca *Terminar* ni liberar las IP elásticas.
+- **Iniciar:** *Start Lab* → EC2 → *Iniciar instancia*. Las IP no cambian y los contenedores arrancan solos (`restart: unless-stopped`).
+- API Gateway no se apaga ni cobra sin peticiones. Oracle Always Free se detiene tras 7 días sin uso: iníciala desde OCI.

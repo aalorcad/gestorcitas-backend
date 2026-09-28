@@ -15,7 +15,7 @@ React + MSAL (Microsoft Entra ID) → AWS API Gateway (JWT) → BFF Spring Secur
 ┌──────────────────────────────────────────┐
 │ AWS API Gateway (HTTP API)               │  ← único punto público
 │ · JWT authorizer (iss, aud, scp, firma)  │  ← 1ª validación
-│ · CORS + OPTIONS /api/{proxy+} sin auth  │
+│ · 25 rutas /api/... + CORS (preflight)   │
 └──────────┬───────────────────────────────┘
            ▼
 ┌──────────────────────────────────────────┐
@@ -41,13 +41,14 @@ React + MSAL (Microsoft Entra ID) → AWS API Gateway (JWT) → BFF Spring Secur
 
 | Componente | Despliegue | Público |
 |---|---|---|
-| Frontend React (nginx) | EC2 · contenedor `frontend` :80 | vía API Gateway `GET /…` |
-| BFF | EC2 · contenedor `bff` :8080 | vía API Gateway `/api/…` + JWT |
-| ms-citas · ms-usuarios · ms-catalogo | EC2 · contenedores :8082 · :8084 · :8083 | No (red interna Docker) |
-| Base de datos | Oracle Autonomous Database (OCI) | Solo IP autorizadas |
+| Frontend React | Local en el computador (`npm run dev`, `http://localhost:5173`) | No (llama a API Gateway) |
+| API Gateway | AWS HTTP API · 25 rutas con autorizador JWT | Sí, HTTPS |
+| BFF | **EC2-A** `gestorcitas-bff` · contenedor :8080 | Solo vía API Gateway |
+| ms-citas · ms-usuarios · ms-catalogo | **EC2-B** `gestorcitas-ms` · contenedores :8082 · :8084 · :8083 | No: el Security Group solo acepta al BFF (IP privada) |
+| Base de datos | Oracle Autonomous Database (OCI) | Solo la IP de EC2-B (ACL) |
 | Identidad | Microsoft Entra ID | — |
 
-La aplicación completa se abre en la URL HTTPS de API Gateway (`https://…execute-api…amazonaws.com`). Detalle en [docs/04-despliegue-ec2.md](docs/04-despliegue-ec2.md).
+El frontend corre en el computador y consume la API por la URL HTTPS de API Gateway (`https://…execute-api…amazonaws.com`). Despliegue en [docs/04-despliegue-ec2.md](docs/04-despliegue-ec2.md).
 
 | Servicio | Responsabilidad |
 |---|---|
@@ -166,7 +167,7 @@ Guards en cadena (`app/router.tsx`): **AuthGuard** (sesión Entra ID) → **Usua
 
 ## Ejecutar en local
 
-> 📘 **Guía completa paso a paso (Entra ID → local → EC2 → API Gateway):** [docs/00-guia-paso-a-paso.md](docs/00-guia-paso-a-paso.md)
+> 📘 **Guía paso a paso (Entra ID → local → EC2 → API Gateway):** [docs/00-guia-paso-a-paso.md](docs/00-guia-paso-a-paso.md)
 
 Requisitos: **Java 17+**, Node 20+, Docker. No necesitas Maven: usa `./mvnw`.
 
@@ -187,7 +188,7 @@ Requisitos: **Java 17+**, Node 20+, Docker. No necesitas Maven: usa `./mvnw`.
    npm install
    npm run dev                 # http://localhost:5173
    ```
-5. Despliegue en AWS (frontend + BFF + microservicios en EC2, detrás de API Gateway): **[docs/04-despliegue-ec2.md](docs/04-despliegue-ec2.md)**.
+5. Despliegue en AWS (BFF en EC2-A, microservicios en EC2-B, detrás de API Gateway; el frontend sigue local): **[docs/04-despliegue-ec2.md](docs/04-despliegue-ec2.md)**.
 
 ### Datos de demostración
 

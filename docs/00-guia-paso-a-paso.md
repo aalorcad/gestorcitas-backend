@@ -240,22 +240,20 @@ npm run dev               # http://localhost:5173 (usa la API en http://localhos
 
 📘 **Paso a paso completo, con diagrama y cada campo de la consola: [04-despliegue-ec2.md](04-despliegue-ec2.md)**
 
-Resumen de lo que queda en AWS:
+Resumen de lo que queda en AWS (el frontend sigue local):
 
 ```
-Navegador ──HTTPS──► API Gateway ──┬── GET /, GET /{proxy+} ─────────► EC2:80   frontend (nginx + React)
-                                   └── /api/{proxy+} + JWT (1ª val.) ─► EC2:8080 bff (2ª validación)
-                                                                             └─► ms-citas / ms-usuarios / ms-catalogo
-                                                                                  (red interna Docker) ──► Oracle ADB
+Frontend local ──HTTPS──► API Gateway: 25 rutas /api/... + JWT (1ª val.) ─► EC2-A :8080 bff (2ª validación)
+                                                                             └─► EC2-B :8082-8084 microservicios
+                                                                                  (IP privada) ──► Oracle ADB
 ```
 
-1. **EC2** t3.medium Amazon Linux 2023, con el user data `infra/aws/ec2-user-data.sh`. Security Group: 22 (tu IP), 80 y 8080.
-2. **Elastic IP** → agrégala a la lista de acceso de la Autonomous DB.
-3. En la EC2: `git clone` del repositorio y `scp` de tu `.env`.
-4. `docker compose up -d --build` → 5 contenedores (igual que en tu Mac).
-5. **API Gateway** con `infra/aws/api-gateway.sh`: rutas del frontend, `/api` con JWT, OPTIONS y CORS.
-6. Agrega la URL de API Gateway como Redirect URI SPA en `gestorcitas-frontend` y en `CORS_ALLOWED_ORIGINS`.
-7. Abre `https://…execute-api…amazonaws.com` e inicia sesión.
+1. **2 EC2** t3.medium Amazon Linux 2023 con `infra/aws/ec2-user-data.sh`: `gestorcitas-bff` (SG: 22 tu IP, 8080) y `gestorcitas-ms` (SG: 22 tu IP, 8082-8084 solo desde el SG del BFF).
+2. **IP elástica** para cada una; la de EC2-B va en la lista de acceso de la Autonomous DB.
+3. En cada EC2: `git clone` de `gestorcitas-backend` y `scp` de tu `.env` (en EC2-A con `MS_HOST` = IP privada de EC2-B).
+4. EC2-B: `docker compose -f docker-compose.ec2-ms.yml up -d --build`. EC2-A: `docker compose -f docker-compose.ec2-bff.yml up -d --build`.
+5. **API Gateway** con `infra/aws/api-gateway.sh` desde CloudShell: autorizador JWT, 25 rutas, OPTIONS y CORS.
+6. En `frontend/.env`: `VITE_API_BASE_URL=<URL de API Gateway>` y `npm run dev`.
 
 ---
 
@@ -272,7 +270,8 @@ Navegador ──HTTPS──► API Gateway ──┬── GET /, GET /{proxy+} 
 - [ ] Paciente: completar perfil → reservar → cancelar.
 - [ ] Médico: ver agenda → confirmar → atender.
 - [ ] Admin: panel, registrar médico, desactivar usuario, especialidades y citas.
-- [ ] `docker compose ps` en la EC2: 5 contenedores arriba; puertos 8082–8084 no accesibles desde Internet.
+- [ ] `docker ps` en EC2-A (bff) y EC2-B (3 microservicios); puertos 8082–8084 no accesibles desde Internet.
+- [ ] Postman: colección `infra/postman` en verde (401 / 200 / 403 / 404).
 - [ ] Oracle Autonomous DB: `02-verificar-datos.sql` muestra los datos en los esquemas `CATALOGO`, `USUARIOS` y `CITAS`.
 
 ---
