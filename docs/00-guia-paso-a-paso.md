@@ -240,10 +240,11 @@ npm run dev               # http://localhost:5173 (usa la API en http://localhos
 
 📘 **Paso a paso completo, con diagrama y cada campo de la consola: [04-despliegue-ec2.md](04-despliegue-ec2.md)**
 
-Resumen de lo que queda en AWS (el frontend sigue local):
+Resumen de lo que queda en AWS:
 
 ```
-Frontend local ──HTTPS──► API Gateway: 25 rutas /api/... + JWT (1ª val.) ─► EC2-A :8080 bff (2ª validación)
+Navegador ──HTTPS──► API Gateway ─┬─ GET /, /{proxy+} ──────────────► EC2-C :80 frontend (nginx)
+                                  └─ 25 rutas /api/... + JWT (1ª val.) ─► EC2-A :8080 bff (2ª validación)
                                                                              └─► EC2-B :8082-8084 microservicios
                                                                                   (IP privada) ──► Oracle ADB
 ```
@@ -253,7 +254,7 @@ Frontend local ──HTTPS──► API Gateway: 25 rutas /api/... + JWT (1ª va
 3. En cada EC2: `git clone` de `gestorcitas-backend` y `scp` de tu `.env` (en EC2-A con `MS_HOST` = IP privada de EC2-B).
 4. EC2-B: `docker compose -f docker-compose.ec2-ms.yml up -d --build`. EC2-A: `docker compose -f docker-compose.ec2-bff.yml up -d --build`.
 5. **API Gateway** con `infra/aws/api-gateway.sh` desde CloudShell: autorizador JWT, 25 rutas, OPTIONS y CORS.
-6. En `frontend/.env`: `VITE_API_BASE_URL=<URL de API Gateway>` y `npm run dev`.
+6. EC2-C `gestorcitas-front`: `git clone` de `gestorcitas-frontend`, `scp` de `frontend/.env` y `docker compose up -d --build`; vuelve a ejecutar el script con `FRONT_HOST`, agrega la URL de API Gateway (y `/login`) como Redirect URI SPA en Entra y en `CORS_ALLOWED_ORIGINS` del BFF. Detalle en 04-despliegue-ec2.md §4.6b.
 
 ---
 

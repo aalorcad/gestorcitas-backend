@@ -47,15 +47,15 @@ con mensajería asíncrona sobre un clúster RabbitMQ de 2 nodos (colas, exchang
 
 | Componente | Despliegue | Público |
 |---|---|---|
-| Frontend React | Local en el computador (`npm run dev`, `http://localhost:5173`) | No (llama a API Gateway) |
-| API Gateway | AWS HTTP API · 25 rutas con autorizador JWT | Sí, HTTPS |
+| Frontend React | **EC2-C** `gestorcitas-front` · nginx :80 (en desarrollo: `npm run dev`) | Vía API Gateway `GET /` y `GET /{proxy+}` |
+| API Gateway | AWS HTTP API · frontend + 25 rutas `/api` con autorizador JWT | Sí, HTTPS (único punto público) |
 | BFF | **EC2-A** `gestorcitas-bff` · contenedor :8080 | Solo vía API Gateway |
 | ms-citas · ms-usuarios · ms-catalogo · ms-rabbit-admin | **EC2-B** `gestorcitas-ms` · contenedores :8082 · :8084 · :8083 · :8085 | No: el Security Group solo acepta al BFF (IP privada) |
 | RabbitMQ (rabbit1 + rabbit2) · ms-notificaciones | **EC2-B** · red Docker interna | No (panel por túnel SSH) |
 | Base de datos | Oracle Autonomous Database (OCI) | Solo la IP de EC2-B (ACL) |
 | Identidad | Microsoft Entra ID | — |
 
-El frontend corre en el computador y consume la API por la URL HTTPS de API Gateway (`https://…execute-api…amazonaws.com`). Despliegue en [docs/04-despliegue-ec2.md](docs/04-despliegue-ec2.md).
+La aplicación completa se abre en la URL HTTPS de API Gateway (`https://…execute-api…amazonaws.com`): `/` sirve el frontend y `/api/…` va al BFF. Despliegue en [docs/04-despliegue-ec2.md](docs/04-despliegue-ec2.md).
 
 | Servicio | Responsabilidad |
 |---|---|
@@ -201,7 +201,7 @@ Requisitos: **Java 17+**, Node 20+, Docker. No necesitas Maven: usa `./mvnw`.
    npm install
    npm run dev                 # http://localhost:5173
    ```
-5. Despliegue en AWS (BFF en EC2-A, microservicios en EC2-B, detrás de API Gateway; el frontend sigue local): **[docs/04-despliegue-ec2.md](docs/04-despliegue-ec2.md)**.
+5. Despliegue en AWS (frontend en EC2-C, BFF en EC2-A, microservicios en EC2-B, detrás de API Gateway): **[docs/04-despliegue-ec2.md](docs/04-despliegue-ec2.md)**.
 
 ### Datos de demostración
 
