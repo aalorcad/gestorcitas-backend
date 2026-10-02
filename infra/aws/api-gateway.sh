@@ -2,9 +2,10 @@
 # ---------------------------------------------------------------------------
 # AWS API Gateway (HTTP API): ÚNICA entrada pública al backend.
 #
-#   Frontend (local, http://localhost:5173)
-#     -> https://<id>.execute-api.<region>.amazonaws.com
+#   Navegador -> https://<id>.execute-api.<region>.amazonaws.com
+#          GET      /  y  /{proxy+}                 -> EC2-C:80   frontend (nginx)   público (solo si FRONT_HOST)
 #          <MÉTODO> /api/...  (25 rutas explícitas)  -> EC2-A:8080 BFF   autorizador JWT (1ª validación)
+#          ANY      /api/{proxy+}                   -> EC2-A:8080 BFF   autorizador JWT (rutas no listadas: el BFF las niega)
 #          OPTIONS  /api/{proxy+}                   -> sin autorizador (preflight CORS)
 #     BFF (Spring Security, 2ª validación + roles) -> EC2-B:8082-8084 microservicios (IP privada)
 #
@@ -20,6 +21,7 @@
 #   export BFF_HOST=<DNS público de EC2-A>   # ej. ec2-1-2-3-4.compute-1.amazonaws.com
 #   export API_ID=<id existente>              # opcional: reutiliza la API (misma URL)
 #   export ENTRA_ISSUER=<issuer>              # opcional: Entra External ID (ver docs/01-entra-id.md)
+#   export FRONT_HOST=<DNS público de EC2-C>  # opcional: publica el frontend (nginx :80) en la misma URL
 #   bash infra/aws/api-gateway.sh
 # ---------------------------------------------------------------------------
 set -euo pipefail
@@ -80,13 +82,13 @@ fi
 ENDPOINT=$($AWS apigatewayv2 get-api --api-id "$API_ID" --query ApiEndpoint)
 echo "   ApiId=$API_ID  Endpoint=$ENDPOINT"
 
-echo ">> 2/6 CORS: solo el frontend local, métodos y headers que usa la app"
-$AWS apigatewayv2 update-api --api-id "$API_ID" --cors-configuration '{
-  "AllowOrigins": ["http://localhost:5173"],
-  "AllowMethods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  "AllowHeaders": ["authorization", "content-type"],
-  "MaxAge": 3600
-}' >/dev/null
+echo ">> 2/6 CORS: frontend publicado (${ENDPOINT}) y frontend local de desarrollo"
+$AWS apigatewayv2 update-api --api-id "$API_ID" --cors-configuration "{
+  \"AllowOrigins\": [\"${ENDPOINT}\", \"http://localhost:5173\"],
+  \"AllowMethods\": [\"GET\", \"POST\", \"PUT\", \"PATCH\", \"DELETE\", \"OPTIONS\"],
+  \"AllowHeaders\": [\"authorization\", \"content-type\"],
+  \"MaxAge\": 3600
+}" >/dev/null
 
 echo ">> 3/6 Autorizador JWT: issuer=${ISSUER} audience=${ENTRA_API_CLIENT_ID}"
 AUTH_ID=$($AWS apigatewayv2 create-authorizer --api-id "$API_ID" --name entra-id-jwt \
@@ -99,16 +101,33 @@ INT_BFF=$($AWS apigatewayv2 create-integration --api-id "$API_ID" --integration-
   --request-parameters '{"overwrite:path":"$request.path"}' \
   --payload-format-version 1.0 --query IntegrationId)
 
-echo ">> 5/6 Rutas (${#ROUTES[@]} con JWT + preflight)"
+echo ">> 5/6 Rutas (${#ROUTES[@]} con JWT + comodín /api + preflight)"
 for route in "${ROUTES[@]}"; do
   $AWS apigatewayv2 create-route --api-id "$API_ID" --route-key "$route" \
     --authorization-type JWT --authorizer-id "$AUTH_ID" --authorization-scopes "$SCOPE" \
     --target "integrations/${INT_BFF}" >/dev/null
   echo "   JWT  $route"
 done
+$AWS apigatewayv2 create-route --api-id "$API_ID" --route-key 'ANY /api/{proxy+}' \
+  --authorization-type JWT --authorizer-id "$AUTH_ID" --authorization-scopes "$SCOPE" \
+  --target "integrations/${INT_BFF}" >/dev/null
+echo "   JWT  ANY /api/{proxy+}  (rutas no listadas -> el BFF responde 403)"
 $AWS apigatewayv2 create-route --api-id "$API_ID" --route-key 'OPTIONS /api/{proxy+}' \
   --authorization-type NONE --target "integrations/${INT_BFF}" >/dev/null
 echo "   NONE OPTIONS /api/{proxy+}"
+
+if [[ -n "${FRONT_HOST:-}" ]]; then
+  echo "   Frontend publicado desde http://${FRONT_HOST}:80"
+  INT_FRONT=$($AWS apigatewayv2 create-integration --api-id "$API_ID" --integration-type HTTP_PROXY \
+    --integration-method GET --integration-uri "http://${FRONT_HOST}:80" \
+    --request-parameters '{"overwrite:path":"$request.path"}' \
+    --payload-format-version 1.0 --query IntegrationId)
+  for route in 'GET /' 'GET /{proxy+}'; do
+    $AWS apigatewayv2 create-route --api-id "$API_ID" --route-key "$route" \
+      --authorization-type NONE --target "integrations/${INT_FRONT}" >/dev/null
+    echo "   NONE $route  (frontend)"
+  done
+fi
 
 echo ">> 6/6 Stage \$default con auto-deploy"
 if ! $AWS apigatewayv2 get-stage --api-id "$API_ID" --stage-name '$default' >/dev/null 2>&1; then
@@ -122,5 +141,9 @@ cat <<MSG
  Prueba sin token (debe dar 401):
      curl -i ${ENDPOINT}/api/me
  En tu Mac, frontend/.env:  VITE_API_BASE_URL=${ENDPOINT}
+ Si publicaste el frontend (FRONT_HOST):
+   - Entra ID > gestorcitas-frontend > Autenticación > SPA: agrega ${ENDPOINT} y ${ENDPOINT}/login
+   - EC2-A .env: CORS_ALLOWED_ORIGINS=http://localhost:5173,${ENDPOINT}  y  docker compose -f docker-compose.ec2-bff.yml up -d
+   - Abre ${ENDPOINT}
 =====================================================================
 MSG

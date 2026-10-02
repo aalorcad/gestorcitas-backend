@@ -1,8 +1,8 @@
 {
   "info": {
-    "_postman_id": "f57d172b-0ae1-483e-b8ba-ff99752ab81a",
+    "_postman_id": "d96a794b-888f-4f57-81f8-be47610bee8d",
     "name": "GestorCitaCloudNative - Evidencia API Gateway",
-    "description": "Evidencia de todas las rutas publicadas en AWS API Gateway.\n\nCómo usar:\n1. Inicia sesión en http://localhost:5173 con cada usuario (una ventana de incógnito por usuario).\n2. DevTools → Network → cualquier petición a /api/ → Headers → Authorization: copia lo que va después de 'Bearer '.\n3. Pega cada token en las variables de la colección: tokenPaciente, tokenMedico, tokenAdmin (duran ~60 min).\n4. Revisa medicoId (id del médico vinculado a tokenMedico) y rutPaciente.\n5. Ejecuta la colección completa con Run collection, en orden.\n\nRespuestas esperadas: 401 sin token o token inválido (API Gateway), 200 con token y rol correcto (JSON de los microservicios), 403 con token válido pero rol incorrecto (BFF), 404 ruta no publicada.",
+    "description": "Evidencia de todas las rutas publicadas en AWS API Gateway.\n\nCómo usar:\n1. Inicia sesión en http://localhost:5173 con cada usuario (una ventana de incógnito por usuario).\n2. DevTools → Network → cualquier petición a /api/ → Headers → Authorization: copia lo que va después de 'Bearer '.\n3. Pega cada token en las variables de la colección: tokenPaciente, tokenMedico, tokenAdmin (duran ~60 min).\n4. Revisa medicoId (id del médico vinculado a tokenMedico) y rutPaciente.\n5. Ejecuta la colección completa con Run collection, en orden.\n\nRespuestas esperadas: 401 sin token o token inválido (API Gateway), 200 con token y rol correcto (JSON de los microservicios), 403 con token válido pero rol incorrecto o ruta no definida (BFF).",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -1671,10 +1671,41 @@
       "description": "El token es válido (pasa API Gateway) pero el rol no permite la ruta: el BFF responde 403."
     },
     {
-      "name": "8. Ruta no publicada → 404 (API Gateway)",
+      "name": "8. Ruta no definida → 401 / 403",
       "item": [
         {
-          "name": "Ruta inexistente",
+          "name": "Ruta inexistente sin token (API Gateway)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/no-existe",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "no-existe"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Ruta inexistente con token (BFF la niega)",
           "request": {
             "method": "GET",
             "header": [],
@@ -1705,14 +1736,14 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('HTTP 404', () => pm.response.to.have.status(404));"
+                  "pm.test('HTTP 403', () => pm.response.to.have.status(403));"
                 ]
               }
             }
           ]
         }
       ],
-      "description": "Solo las rutas creadas en API Gateway existen."
+      "description": "Una ruta /api no listada exige JWT en API Gateway y el BFF la rechaza (denyAll)."
     }
   ],
   "variable": [

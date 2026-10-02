@@ -200,7 +200,7 @@ Requisitos: **Java 17+**, Node 20+, Docker. No necesitas Maven: usa `./mvnw`.
 
 **Evidencia de rutas (Postman):** `infra/postman/GestorCitas.postman_collection.json` prueba las 25 rutas de API Gateway
 con y sin token: 401 (sin token o token inválido, API Gateway), 200/201/204 (JSON de los microservicios),
-403 (rol no permitido, BFF) y 404 (ruta no publicada). Instrucciones en la descripción de la colección.
+403 (rol no permitido o ruta no definida, BFF). Instrucciones en la descripción de la colección.
 
 
 ```bash

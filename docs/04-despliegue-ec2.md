@@ -1,7 +1,8 @@
-# 4. Despliegue en AWS: BFF en EC2-A y microservicios en EC2-B
+# 4. Despliegue en AWS: frontend en EC2-C, BFF en EC2-A y microservicios en EC2-B
 
-El frontend corre **local** (`npm run dev`) y consume la API por AWS API Gateway, que es el único punto público.
-Ambas EC2 clonan el mismo repositorio `gestorcitas-backend` y cada una levanta solo su parte.
+AWS API Gateway es el único punto público y entrega HTTPS (requisito de Entra ID para el login):
+`/` sirve el frontend (EC2-C) y `/api/...` va al BFF (EC2-A). EC2-A y EC2-B clonan `gestorcitas-backend`;
+EC2-C clona `gestorcitas-frontend`. En desarrollo el frontend también puede correr local (`npm run dev`).
 
 ## 4.1 Qué corre dónde
 
@@ -109,10 +110,32 @@ Verificación:
 
 ```bash
 curl -i <URL>/api/me          # 401 (sin token)
-curl -i <URL>/api/no-existe   # 404 (ruta no publicada)
+curl -i <URL>/api/no-existe   # 401 sin token; con token el BFF responde 403
 ```
 
 Evidencia completa con token: colección Postman `infra/postman/GestorCitas.postman_collection.json`.
+
+## 4.6b Frontend en EC2-C (`gestorcitas-front`)
+
+1. **Security Group** `gestorcitas-front-sg`: SSH 22 desde *Mi IP* · HTTP 80 desde 0.0.0.0/0 (API Gateway llama por internet).
+2. **Lanzar instancia** `gestorcitas-front`: Amazon Linux 2023, **t3.small** (el build de Vite necesita ~1 GB de RAM), par `gestorcitas-key`, ese SG y el mismo user data. Asígnale una **IP elástica**.
+3. Desde tu Mac copia `frontend/.env` (Client ID, Tenant ID, scope y `VITE_API_BASE_URL` = URL de API Gateway):
+
+```bash
+scp -i ~/.ssh/gestorcitas-key.pem frontend/.env ec2-user@<IP-EC2-C>:~/
+ssh -i ~/.ssh/gestorcitas-key.pem ec2-user@<IP-EC2-C>
+git clone https://github.com/aalorcad/gestorcitas-frontend.git
+mv ~/.env gestorcitas-frontend/ && cd gestorcitas-frontend
+docker compose up -d --build
+curl -s localhost | head -5          # HTML de la SPA
+```
+
+4. **API Gateway**: vuelve a ejecutar `infra/aws/api-gateway.sh` agregando `export FRONT_HOST=<DNS público de EC2-C>`
+   (crea `GET /` y `GET /{proxy+}` hacia nginx, sin autorizador).
+5. **Entra ID** → `gestorcitas-frontend` → **Autenticación** → SPA: agrega `https://<id>.execute-api.us-east-1.amazonaws.com` y `…/login`.
+6. **EC2-A** `.env`: `CORS_ALLOWED_ORIGINS=http://localhost:5173,https://<id>.execute-api.us-east-1.amazonaws.com` y
+   `docker compose -f docker-compose.ec2-bff.yml up -d` (el navegador envía `Origin` también en peticiones del mismo dominio).
+7. Abre `https://<id>.execute-api.us-east-1.amazonaws.com` e inicia sesión.
 
 ## 4.7 Actualizar después de un cambio
 
