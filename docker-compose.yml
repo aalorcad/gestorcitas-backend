@@ -218,7 +218,7 @@ services:
 
   frontend:
     build:
-      context: ./frontend
+      context: ../gestorcitas-frontend
       args:
         VITE_ENTRA_CLIENT_ID: ${FRONT_CLIENT_ID}
         VITE_ENTRA_TENANT_ID: ${ENTRA_TENANT_ID}
