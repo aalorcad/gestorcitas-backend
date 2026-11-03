@@ -2,6 +2,8 @@ package cl.duoc.gestorcitas.bff;
 
 import cl.duoc.gestorcitas.bff.service.CatalogoService;
 import cl.duoc.gestorcitas.bff.service.CitaService;
+import cl.duoc.gestorcitas.bff.service.MensajeriaAdminService;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import cl.duoc.gestorcitas.bff.service.UsuarioService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -34,6 +36,8 @@ class SecurityConfigTest {
     private CatalogoService catalogoService;
     @MockitoBean
     private UsuarioService usuarioService;
+    @MockitoBean
+    private MensajeriaAdminService mensajeriaAdminService;
 
     @Test
     void sinTokenResponde401() throws Exception {
@@ -92,6 +96,28 @@ class SecurityConfigTest {
         mvc.perform(options("/api/citas/mias")
                         .header("Origin", "http://localhost:5173")
                         .header("Access-Control-Request-Method", "GET"))
+                .andExpect(status().isOk());
+    }
+
+    // ------------------------------------------------------------------ Administración de RabbitMQ (EP3)
+
+    @Test
+    void sinTokenNoSeAdministraRabbitMq() throws Exception {
+        mvc.perform(get("/api/admin/mensajeria/queues")).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void pacienteNoPuedeAdministrarRabbitMq() throws Exception {
+        mvc.perform(get("/api/admin/mensajeria/queues")
+                        .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_Paciente"))))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void adminPuedeListarColas() throws Exception {
+        when(mensajeriaAdminService.listarColas()).thenReturn(JsonNodeFactory.instance.arrayNode());
+        mvc.perform(get("/api/admin/mensajeria/queues")
+                        .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_Admin"))))
                 .andExpect(status().isOk());
     }
 }

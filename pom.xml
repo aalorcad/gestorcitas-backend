@@ -13,6 +13,8 @@
         <module>ms-catalogo</module>
         <module>ms-usuarios</module>
         <module>ms-citas</module>
+        <module>ms-notificaciones</module>
+        <module>ms-rabbit-admin</module>
         <module>bff</module>
     </modules>
 </project>

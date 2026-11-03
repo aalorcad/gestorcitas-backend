@@ -24,4 +24,5 @@ services:
       CATALOGO_URL: http://${MS_HOST:?Define MS_HOST (IP privada de EC2-B)}:8083
       USUARIOS_URL: http://${MS_HOST}:8084
       CITAS_URL: http://${MS_HOST}:8082
+      MENSAJERIA_ADMIN_URL: http://${MS_HOST}:8085
     ports: ["8080:8080"]

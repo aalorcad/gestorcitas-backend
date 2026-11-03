@@ -1,0 +1,67 @@
+server:
+  port: ${SERVER_PORT:8086}
+
+spring:
+  application:
+    name: ms-notificaciones
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+  # RabbitMQ: clúster de 2 nodos (rabbit1, rabbit2). Si un nodo cae, el cliente se reconecta al otro.
+  rabbitmq:
+    addresses: ${RABBITMQ_ADDRESSES:localhost:5672}
+    username: ${RABBITMQ_USER:gestorcitas}
+    password: ${RABBITMQ_PASS:gestorcitas}
+    listener:
+      simple:
+        # ACK MANUAL: cada consumidor confirma (basicAck) o rechaza (basicNack) explícitamente
+        acknowledge-mode: manual
+        prefetch: 10
+        # Un mensaje rechazado nunca vuelve a la misma cola en bucle: va a la DLQ
+        default-requeue-rejected: false
+        # El servicio arranca aunque las colas aún no existan (las declara RabbitAdmin al conectar)
+        missing-queues-fatal: false
+
+app:
+  # ------------------------------------------------------------------
+  # Mensajería (EP3): TODOS los nombres de colas, exchanges, routing keys y DLQ en un solo lugar.
+  # Cada flujo = exchange + routing key + cola principal + cola de reintento (con TTL) + DLQ.
+  # ------------------------------------------------------------------
+  messaging:
+    dead-letter-exchange: gestorcitas.dlx          # direct, recibe los mensajes rechazados
+    reintentos:
+      maximo: ${MESSAGING_MAX_REINTENTOS:3}         # intentos totales antes de enviar a la DLQ
+      espera-ms: ${MESSAGING_ESPERA_MS:5000}        # TTL de la cola de reintento
+      header: x-gestorcitas-intento                 # header con el número de intento
+    notificaciones-citas:
+      exchange: gestorcitas.citas.eventos           # topic (publica ms-citas)
+      routing-key: "cita.*"
+      cola: q.notificaciones.citas
+      cola-reintento: q.notificaciones.citas.retry
+      dlq: q.notificaciones.citas.dlq
+    comprobantes-citas:
+      exchange: gestorcitas.citas.comprobantes      # direct (publica ms-citas)
+      routing-key: comprobante.generar
+      cola: q.comprobantes.citas
+      cola-reintento: q.comprobantes.citas.retry
+      dlq: q.comprobantes.citas.dlq
+    auditoria-usuarios:
+      exchange: gestorcitas.usuarios.eventos        # topic (publica ms-usuarios)
+      routing-key: "usuario.#"
+      cola: q.auditoria.usuarios
+      cola-reintento: q.auditoria.usuarios.retry
+      dlq: q.auditoria.usuarios.dlq
+
+  comprobantes:
+    directorio: ${COMPROBANTES_DIR:/tmp/gestorcitas/comprobantes}
+
+  # Ayuda para la demo: los correos que terminan en este dominio simulan una caída TEMPORAL del
+  # servidor de correo (error recuperable -> reintentos -> DLQ). Vacío = sin simulación.
+  simulacion:
+    dominio-correo-caido: ${SIMULAR_DOMINIO_CAIDO:falla.test}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

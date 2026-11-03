@@ -12,6 +12,8 @@ import cl.duoc.gestorcitas.citas.entity.EstadoCita;
 import cl.duoc.gestorcitas.citas.exception.BusinessException;
 import cl.duoc.gestorcitas.citas.exception.ForbiddenOperationException;
 import cl.duoc.gestorcitas.citas.mapper.CitaMapper;
+import cl.duoc.gestorcitas.citas.messaging.CitaEventPublisher;
+import cl.duoc.gestorcitas.citas.messaging.TipoEventoCita;
 import cl.duoc.gestorcitas.citas.repository.CitaRepository;
 import cl.duoc.gestorcitas.citas.service.impl.CitaServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,6 +43,8 @@ class CitaServiceImplTest {
     private CitaRepository citaRepository;
     @Mock
     private UsuariosClient usuariosClient;
+    @Mock
+    private CitaEventPublisher eventos;
 
     private CitaServiceImpl service;
 
@@ -54,7 +58,7 @@ class CitaServiceImplTest {
     @BeforeEach
     void setUp() {
         AgendaProperties agenda = new AgendaProperties(null, null, 30, null, 1);
-        service = new CitaServiceImpl(citaRepository, usuariosClient, new CitaMapper(), agenda, CLOCK);
+        service = new CitaServiceImpl(citaRepository, usuariosClient, new CitaMapper(), agenda, CLOCK, eventos);
     }
 
     @Test
@@ -69,6 +73,9 @@ class CitaServiceImplTest {
         assertThat(r.estado()).isEqualTo(EstadoCita.PENDIENTE);
         assertThat(r.medicoNombre()).isEqualTo("Dra. Rojas");
         assertThat(r.pacienteId()).isEqualTo("oid-paciente");
+        // La reserva publica el evento de creación y solicita el comprobante
+        verify(eventos).publicarCambioDeEstado(any(Cita.class), eq(TipoEventoCita.CREADA));
+        verify(eventos).solicitarComprobante(any(Cita.class));
     }
 
     @Test
@@ -100,6 +107,8 @@ class CitaServiceImplTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("ya está reservado");
         verify(citaRepository, never()).save(any());
+        // Si la regla de negocio falla no se publica nada
+        verifyNoInteractions(eventos);
     }
 
     @Test
@@ -130,5 +139,19 @@ class CitaServiceImplTest {
 
         assertThatThrownBy(() -> service.cancelar(5L, paciente))
                 .isInstanceOf(ForbiddenOperationException.class);
+    }
+
+    @Test
+    void cancelarPublicaEventoCancelada() {
+        Cita cita = Cita.builder().id(7L).pacienteId("oid-paciente").estado(EstadoCita.PENDIENTE)
+                .fechaHora(LocalDateTime.of(2026, 9, 29, 10, 0)).build();
+        when(citaRepository.findById(7L)).thenReturn(Optional.of(cita));
+        when(citaRepository.save(any(Cita.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        CitaResponse r = service.cancelar(7L, paciente);
+
+        assertThat(r.estado()).isEqualTo(EstadoCita.CANCELADA);
+        verify(eventos).publicarCambioDeEstado(cita, TipoEventoCita.CANCELADA);
+        verify(eventos, never()).solicitarComprobante(any());
     }
 }

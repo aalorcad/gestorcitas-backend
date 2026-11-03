@@ -6,6 +6,8 @@ import cl.duoc.gestorcitas.usuarios.dto.UsuarioResponse;
 import cl.duoc.gestorcitas.usuarios.entity.*;
 import cl.duoc.gestorcitas.usuarios.exception.BusinessException;
 import cl.duoc.gestorcitas.usuarios.mapper.UsuarioMapper;
+import cl.duoc.gestorcitas.usuarios.messaging.TipoEventoUsuario;
+import cl.duoc.gestorcitas.usuarios.messaging.UsuarioEventPublisher;
 import cl.duoc.gestorcitas.usuarios.repository.PerfilPacienteRepository;
 import cl.duoc.gestorcitas.usuarios.repository.UsuarioRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -36,12 +38,14 @@ class UsuarioServiceImplTest {
     private PerfilPacienteRepository perfilPacienteRepository;
     @Mock
     private EspecialidadResolver especialidades;
+    @Mock
+    private UsuarioEventPublisher eventos;
 
     private UsuarioServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        service = new UsuarioServiceImpl(usuarioRepository, perfilPacienteRepository, new UsuarioMapper(), especialidades, CLOCK);
+        service = new UsuarioServiceImpl(usuarioRepository, perfilPacienteRepository, new UsuarioMapper(), especialidades, CLOCK, eventos);
     }
 
     @Test
@@ -61,6 +65,8 @@ class UsuarioServiceImplTest {
         assertThat(r.oid()).isEqualTo("oid-medico");
         assertThat(r.vinculadoEntraId()).isTrue();
         assertThat(r.perfilMedico().especialidadNombre()).isEqualTo("Medicina General");
+        // Usuario ya existente (pre-registrado): no es un registro nuevo
+        verify(eventos, never()).publicar(any(), any(), any());
     }
 
     @Test
@@ -74,6 +80,7 @@ class UsuarioServiceImplTest {
         assertThat(r.roles()).containsExactly("Paciente");
         assertThat(r.perfilPaciente()).isNotNull();
         assertThat(r.perfilPaciente().completo()).isFalse();
+        verify(eventos).publicar(any(Usuario.class), eq(TipoEventoUsuario.REGISTRADO), eq("oid-p"));
     }
 
     @Test
@@ -97,5 +104,19 @@ class UsuarioServiceImplTest {
 
         assertThatThrownBy(() -> service.desactivar(3L, new UsuarioContexto("oid-admin", "Admin", "admin@demo.cl", Set.of("Admin"))))
                 .isInstanceOf(BusinessException.class);
+        verifyNoInteractions(eventos);
+    }
+
+    @Test
+    void desactivarPacientePublicaEventoDeAuditoria() {
+        Usuario paciente = Usuario.builder().id(9L).oid("oid-p").email("ana@demo.cl").nombre("Ana")
+                .roles(EnumSet.of(RolUsuario.PACIENTE)).activo(true).build();
+        when(usuarioRepository.findById(9L)).thenReturn(Optional.of(paciente));
+        when(usuarioRepository.save(any(Usuario.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        UsuarioResponse r = service.desactivar(9L, new UsuarioContexto("oid-admin", "Admin", "admin@demo.cl", Set.of("Admin")));
+
+        assertThat(r.activo()).isFalse();
+        verify(eventos).publicar(paciente, TipoEventoUsuario.DESACTIVADO, "oid-admin");
     }
 }

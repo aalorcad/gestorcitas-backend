@@ -9,6 +9,8 @@ import cl.duoc.gestorcitas.usuarios.exception.BusinessException;
 import cl.duoc.gestorcitas.usuarios.exception.ForbiddenOperationException;
 import cl.duoc.gestorcitas.usuarios.exception.ResourceNotFoundException;
 import cl.duoc.gestorcitas.usuarios.mapper.UsuarioMapper;
+import cl.duoc.gestorcitas.usuarios.messaging.TipoEventoUsuario;
+import cl.duoc.gestorcitas.usuarios.messaging.UsuarioEventPublisher;
 import cl.duoc.gestorcitas.usuarios.repository.PerfilPacienteRepository;
 import cl.duoc.gestorcitas.usuarios.repository.UsuarioRepository;
 import cl.duoc.gestorcitas.usuarios.service.UsuarioService;
@@ -27,7 +29,10 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-/** Reglas de negocio de los usuarios (pacientes, médicos y administradores). */
+/**
+ * Reglas de negocio de los usuarios (pacientes, médicos y administradores).
+ * Los eventos de auditoría se publican a través de {@link UsuarioEventPublisher} (sin conocer RabbitMQ).
+ */
 @Service
 @RequiredArgsConstructor
 public class UsuarioServiceImpl implements UsuarioService {
@@ -39,6 +44,7 @@ public class UsuarioServiceImpl implements UsuarioService {
     private final UsuarioMapper mapper;
     private final EspecialidadResolver especialidades;
     private final Clock clock;
+    private final UsuarioEventPublisher eventos;
 
     // ------------------------------------------------------------------ Usuario autenticado
 
@@ -66,7 +72,12 @@ public class UsuarioServiceImpl implements UsuarioService {
         }
         usuario.setUltimoAcceso(ahora());
 
-        return responder(usuarioRepository.save(usuario));
+        boolean esNuevo = usuario.getId() == null;
+        Usuario guardado = usuarioRepository.save(usuario);
+        if (esNuevo) {
+            eventos.publicar(guardado, TipoEventoUsuario.REGISTRADO, ctx.id());
+        }
+        return responder(guardado);
     }
 
     @Override
@@ -159,7 +170,9 @@ public class UsuarioServiceImpl implements UsuarioService {
         exigirAdmin(ctx);
         Usuario usuario = buscar(id);
         usuario.setActivo(true);
-        return responder(usuarioRepository.save(usuario));
+        Usuario guardado = usuarioRepository.save(usuario);
+        eventos.publicar(guardado, TipoEventoUsuario.ACTIVADO, ctx.id());
+        return responder(guardado);
     }
 
     @Override
@@ -175,7 +188,9 @@ public class UsuarioServiceImpl implements UsuarioService {
             throw new BusinessException("Debe existir al menos un administrador activo");
         }
         usuario.setActivo(false);
-        return responder(usuarioRepository.save(usuario));
+        Usuario guardado = usuarioRepository.save(usuario);
+        eventos.publicar(guardado, TipoEventoUsuario.DESACTIVADO, ctx.id());
+        return responder(guardado);
     }
 
     @Override

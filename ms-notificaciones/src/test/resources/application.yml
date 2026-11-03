@@ -1,0 +1,46 @@
+spring:
+  rabbitmq:
+    listener:
+      simple:
+        # Sin broker en los tests: los listeners no se inician
+        auto-startup: false
+        acknowledge-mode: manual
+
+app:
+  # ------------------------------------------------------------------
+  # Mensajería (EP3): TODOS los nombres de colas, exchanges, routing keys y DLQ en un solo lugar.
+  # Cada flujo = exchange + routing key + cola principal + cola de reintento (con TTL) + DLQ.
+  # ------------------------------------------------------------------
+  messaging:
+    dead-letter-exchange: gestorcitas.dlx          # direct, recibe los mensajes rechazados
+    reintentos:
+      maximo: ${MESSAGING_MAX_REINTENTOS:3}         # intentos totales antes de enviar a la DLQ
+      espera-ms: ${MESSAGING_ESPERA_MS:5000}        # TTL de la cola de reintento
+      header: x-gestorcitas-intento                 # header con el número de intento
+    notificaciones-citas:
+      exchange: gestorcitas.citas.eventos           # topic (publica ms-citas)
+      routing-key: "cita.*"
+      cola: q.notificaciones.citas
+      cola-reintento: q.notificaciones.citas.retry
+      dlq: q.notificaciones.citas.dlq
+    comprobantes-citas:
+      exchange: gestorcitas.citas.comprobantes      # direct (publica ms-citas)
+      routing-key: comprobante.generar
+      cola: q.comprobantes.citas
+      cola-reintento: q.comprobantes.citas.retry
+      dlq: q.comprobantes.citas.dlq
+    auditoria-usuarios:
+      exchange: gestorcitas.usuarios.eventos        # topic (publica ms-usuarios)
+      routing-key: "usuario.#"
+      cola: q.auditoria.usuarios
+      cola-reintento: q.auditoria.usuarios.retry
+      dlq: q.auditoria.usuarios.dlq
+
+  comprobantes:
+    directorio: ${COMPROBANTES_DIR:/tmp/gestorcitas/comprobantes}
+
+  # Ayuda para la demo: los correos que terminan en este dominio simulan una caída TEMPORAL del
+  # servidor de correo (error recuperable -> reintentos -> DLQ). Vacío = sin simulación.
+  simulacion:
+    dominio-correo-caido: ${SIMULAR_DOMINIO_CAIDO:falla.test}
+

@@ -10,3 +10,15 @@ spring:
 app:
   services:
     usuarios-url: http://localhost:8084
+  # En tests no se publica a RabbitMQ (no hay broker); los nombres se mantienen iguales a main
+  messaging:
+    habilitado: false
+    exchanges:
+      citas-eventos: gestorcitas.citas.eventos
+      citas-comprobantes: gestorcitas.citas.comprobantes
+    routing-keys:
+      cita-creada: cita.creada
+      cita-confirmada: cita.confirmada
+      cita-cancelada: cita.cancelada
+      cita-atendida: cita.atendida
+      comprobante-generar: comprobante.generar

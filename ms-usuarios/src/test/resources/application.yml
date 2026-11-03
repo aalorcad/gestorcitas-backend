@@ -10,3 +10,12 @@ spring:
 app:
   services:
     catalogo-url: http://localhost:8083
+  # En tests no se publica a RabbitMQ (no hay broker)
+  messaging:
+    habilitado: false
+    exchanges:
+      usuarios-eventos: gestorcitas.usuarios.eventos
+    routing-keys:
+      usuario-registrado: usuario.registrado
+      usuario-activado: usuario.activado
+      usuario-desactivado: usuario.desactivado

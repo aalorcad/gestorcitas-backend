@@ -37,7 +37,7 @@ EC2-C clona `gestorcitas-frontend`. En desarrollo el frontend también puede cor
 | SG | Instancia | Reglas de entrada |
 |---|---|---|
 | `gestorcitas-sg` | EC2-A (BFF) | SSH 22 desde *Mi IP* · TCP 8080 desde 0.0.0.0/0 (API Gateway llama por internet; sin token el BFF responde 401) |
-| `gestorcitas-ms-sg` | EC2-B (microservicios) | SSH 22 desde *Mi IP* · TCP 8082-8084 **solo** desde el SG `gestorcitas-sg` |
+| `gestorcitas-ms-sg` | EC2-B (microservicios) | SSH 22 desde *Mi IP* · TCP 8082-8085 **solo** desde el SG `gestorcitas-sg` (8085 = ms-rabbit-admin). RabbitMQ (5672/15672) no se abre: el panel se ve con `ssh -L 15672:localhost:15672` |
 
 > En otra red (por ejemplo la sala de clases) edita la regla SSH y vuelve a elegir *Mi IP*.
 

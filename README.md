@@ -1,7 +1,8 @@
 # GestorCitaCloudNative
 
 Sistema de **reserva de citas médicas** con arquitectura cloud native:
-React + MSAL (Microsoft Entra ID) → AWS API Gateway (JWT) → BFF Spring Security → microservicios Spring Boot → Oracle Autonomous Database.
+React + MSAL (Microsoft Entra ID) → AWS API Gateway (JWT) → BFF Spring Security → microservicios Spring Boot → Oracle Autonomous Database,
+con mensajería asíncrona sobre un clúster RabbitMQ de 2 nodos (colas, exchanges y DLQ) — ver [docs/05-mensajeria-rabbitmq.md](docs/05-mensajeria-rabbitmq.md).
 
 ## Arquitectura
 
@@ -35,6 +36,11 @@ React + MSAL (Microsoft Entra ID) → AWS API Gateway (JWT) → BFF Spring Secur
         │ Oracle Autonomous Database (OCI)   │  1 instancia
         │ esquemas: CITAS · USUARIOS · CATALOGO │  1 esquema por microservicio
         └────────────────────────────────────┘
+
+  ms-citas · ms-usuarios ──publican──► ┌──────────────────────────────┐ ──consume──► ms-notificaciones :8086
+  (después del commit)                 │ RabbitMQ · clúster 2 nodos   │              (correo, comprobante, auditoría,
+  BFF /api/admin/mensajeria ─────────► │ topic · direct · DLX · DLQ   │               reintentos y DLQ)
+            └──► ms-rabbit-admin :8085 └──────────────────────────────┘
 ```
 
 ### Dónde corre cada componente
@@ -44,7 +50,8 @@ React + MSAL (Microsoft Entra ID) → AWS API Gateway (JWT) → BFF Spring Secur
 | Frontend React | Local en el computador (`npm run dev`, `http://localhost:5173`) | No (llama a API Gateway) |
 | API Gateway | AWS HTTP API · 25 rutas con autorizador JWT | Sí, HTTPS |
 | BFF | **EC2-A** `gestorcitas-bff` · contenedor :8080 | Solo vía API Gateway |
-| ms-citas · ms-usuarios · ms-catalogo | **EC2-B** `gestorcitas-ms` · contenedores :8082 · :8084 · :8083 | No: el Security Group solo acepta al BFF (IP privada) |
+| ms-citas · ms-usuarios · ms-catalogo · ms-rabbit-admin | **EC2-B** `gestorcitas-ms` · contenedores :8082 · :8084 · :8083 · :8085 | No: el Security Group solo acepta al BFF (IP privada) |
+| RabbitMQ (rabbit1 + rabbit2) · ms-notificaciones | **EC2-B** · red Docker interna | No (panel por túnel SSH) |
 | Base de datos | Oracle Autonomous Database (OCI) | Solo la IP de EC2-B (ACL) |
 | Identidad | Microsoft Entra ID | — |
 
@@ -56,6 +63,8 @@ El frontend corre en el computador y consume la API por la URL HTTPS de API Gate
 | **ms-usuarios** | Pacientes, médicos y administradores: sincronización con Entra ID, perfiles, activación, pre-registro de médicos |
 | **ms-catalogo** | Especialidades médicas y valor de la consulta |
 | **bff** | Segunda validación JWT, autorización por rol, orquestación y reglas entre servicios |
+| **ms-notificaciones** | Consumidor RabbitMQ: notifica cambios de citas, genera comprobantes y audita usuarios (ACK manual, reintentos, DLQ) |
+| **ms-rabbit-admin** | API REST para crear y eliminar colas, exchanges y bindings (rol Admin vía BFF) |
 
 ## Actores y vistas
 
@@ -86,10 +95,13 @@ GestorCitaCloudNative/
 ├── ms-citas/          Microservicio principal
 ├── ms-usuarios/       Microservicio de usuarios
 ├── ms-catalogo/       Microservicio de catálogo
+├── ms-notificaciones/ Consumidor RabbitMQ (notificaciones, comprobantes, auditoría)
+├── ms-rabbit-admin/   Administrador de RabbitMQ (API REST)
 ├── infra/
 │   ├── db/oracle/     Scripts de esquemas para Autonomous DB (adb/) y Oracle local (local/)
+│   ├── rabbitmq/      Configuración del clúster de 2 nodos
 │   └── aws/           Script API Gateway + user-data EC2
-├── docs/              00-guia-paso-a-paso.md · 01-entra-id.md · 01b-entra-external-id.md · 03-oracle-autonomous-db.md · 04-despliegue-ec2.md
+├── docs/              00-guia-paso-a-paso.md · 01-entra-id.md · 01b-entra-external-id.md · 03-oracle-autonomous-db.md · 04-despliegue-ec2.md · 05-mensajeria-rabbitmq.md
 ├── docker-compose.yml
 ├── mvnw               Maven Wrapper (no requiere Maven instalado)
 └── pom.xml            Agregador Maven
@@ -104,6 +116,7 @@ cl.duoc.gestorcitas.<servicio>
 ├── service/       Interfaces + impl/  ← TODA la lógica de negocio
 ├── controller/    REST: recibe, valida formato (@Valid) y delega
 ├── dto/  mapper/  client/  config/  exception/  util/
+├── messaging/     RabbitMQ: config/ (nombres + beans), producer/, consumer/<dominio>/, event/ (contratos JSON)
 └── security/      (solo BFF) validadores JWT y conversor de roles
 ```
 
@@ -221,3 +234,7 @@ cd frontend && npm run typecheck
 - [x] Microservicio principal (ms-citas), de catálogo (ms-catalogo) y de usuarios (ms-usuarios)
 - [x] Persistencia en Oracle Autonomous Database: 1 instancia, esquemas CATALOGO · USUARIOS · CITAS
 - [x] Portales diferenciados y funcionales para Paciente, Médico y Admin
+- [x] RabbitMQ: nombres centralizados en `app.messaging`, beans Queue/Exchange/Binding por caso de uso
+- [x] Productores (ms-citas, ms-usuarios) y consumidores `@RabbitListener` por dominio (ms-notificaciones)
+- [x] ACK manual, reintentos con cola de espera (TTL) y DLQ con registro en logs
+- [x] ms-rabbit-admin: API REST validada para colas, exchanges y bindings (`RabbitAdminService`)

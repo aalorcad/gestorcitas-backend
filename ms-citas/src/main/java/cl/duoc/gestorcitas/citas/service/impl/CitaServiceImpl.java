@@ -9,6 +9,8 @@ import cl.duoc.gestorcitas.citas.exception.BusinessException;
 import cl.duoc.gestorcitas.citas.exception.ForbiddenOperationException;
 import cl.duoc.gestorcitas.citas.exception.ResourceNotFoundException;
 import cl.duoc.gestorcitas.citas.mapper.CitaMapper;
+import cl.duoc.gestorcitas.citas.messaging.CitaEventPublisher;
+import cl.duoc.gestorcitas.citas.messaging.TipoEventoCita;
 import cl.duoc.gestorcitas.citas.repository.CitaRepository;
 import cl.duoc.gestorcitas.citas.service.CitaService;
 import lombok.RequiredArgsConstructor;
@@ -25,6 +27,9 @@ import java.util.stream.Collectors;
 
 /**
  * Contiene TODAS las reglas de negocio de las citas médicas.
+ * <p>
+ * Para la mensajería solo usa la interfaz {@link CitaEventPublisher}: no conoce RabbitMQ,
+ * exchanges ni routing keys. Los eventos se publican después del commit.
  */
 @Service
 @RequiredArgsConstructor
@@ -37,6 +42,7 @@ public class CitaServiceImpl implements CitaService {
     private final CitaMapper mapper;
     private final AgendaProperties agenda;
     private final Clock clock;
+    private final CitaEventPublisher eventos;
 
     // ------------------------------------------------------------------ Paciente
 
@@ -89,7 +95,10 @@ public class CitaServiceImpl implements CitaService {
                 .creadaEn(ahora)
                 .actualizadaEn(ahora)
                 .build();
-        return mapper.toResponse(citaRepository.save(cita));
+        Cita guardada = citaRepository.save(cita);
+        eventos.publicarCambioDeEstado(guardada, TipoEventoCita.CREADA);
+        eventos.solicitarComprobante(guardada);
+        return mapper.toResponse(guardada);
     }
 
     @Override
@@ -233,7 +242,9 @@ public class CitaServiceImpl implements CitaService {
     private CitaResponse cambiarEstado(Cita cita, EstadoCita nuevoEstado) {
         cita.setEstado(nuevoEstado);
         cita.setActualizadaEn(ahora());
-        return mapper.toResponse(citaRepository.save(cita));
+        Cita guardada = citaRepository.save(cita);
+        eventos.publicarCambioDeEstado(guardada, TipoEventoCita.desdeEstado(nuevoEstado));
+        return mapper.toResponse(guardada);
     }
 
     private Cita buscar(Long id) {

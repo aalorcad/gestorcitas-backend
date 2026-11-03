@@ -31,6 +31,11 @@ public class RestClientConfig {
         return RestClient.builder().baseUrl(services.usuariosUrl()).requestFactory(factory()).build();
     }
 
+    @Bean
+    public RestClient mensajeriaAdminRestClient(ServicesProperties services) {
+        return RestClient.builder().baseUrl(services.mensajeriaAdminUrl()).requestFactory(factory()).build();
+    }
+
     private JdkClientHttpRequestFactory factory() {
         HttpClient httpClient = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)

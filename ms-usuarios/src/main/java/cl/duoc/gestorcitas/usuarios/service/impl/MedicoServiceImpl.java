@@ -8,6 +8,8 @@ import cl.duoc.gestorcitas.usuarios.exception.BusinessException;
 import cl.duoc.gestorcitas.usuarios.exception.ForbiddenOperationException;
 import cl.duoc.gestorcitas.usuarios.exception.ResourceNotFoundException;
 import cl.duoc.gestorcitas.usuarios.mapper.UsuarioMapper;
+import cl.duoc.gestorcitas.usuarios.messaging.TipoEventoUsuario;
+import cl.duoc.gestorcitas.usuarios.messaging.UsuarioEventPublisher;
 import cl.duoc.gestorcitas.usuarios.repository.UsuarioRepository;
 import cl.duoc.gestorcitas.usuarios.service.MedicoService;
 import lombok.RequiredArgsConstructor;
@@ -32,6 +34,7 @@ public class MedicoServiceImpl implements MedicoService {
     private final UsuarioMapper mapper;
     private final EspecialidadResolver especialidades;
     private final Clock clock;
+    private final UsuarioEventPublisher eventos;
 
     @Override
     @Transactional(readOnly = true)
@@ -79,6 +82,7 @@ public class MedicoServiceImpl implements MedicoService {
                 .creadoEn(LocalDateTime.now(clock))
                 .build();
         Usuario guardado = usuarioRepository.save(medico);
+        eventos.publicar(guardado, TipoEventoUsuario.REGISTRADO, ctx.id());
         return mapper.toResponse(guardado, Map.of(esp.id(), esp.nombre()));
     }
 

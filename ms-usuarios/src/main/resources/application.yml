@@ -22,6 +22,13 @@ spring:
   jackson:
     serialization:
       write-dates-as-timestamps: false
+  # RabbitMQ: clúster de 2 nodos (rabbit1, rabbit2). Spring reconecta al otro nodo si uno cae.
+  rabbitmq:
+    addresses: ${RABBITMQ_ADDRESSES:localhost:5672}
+    username: ${RABBITMQ_USER:gestorcitas}
+    password: ${RABBITMQ_PASS:gestorcitas}
+    publisher-confirm-type: correlated
+    publisher-returns: true
 
 app:
   zona-horaria: ${APP_TIMEZONE:America/Santiago}
@@ -29,6 +36,18 @@ app:
     catalogo-url: ${CATALOGO_URL:http://localhost:8083}
   demo:
     medico-email: ${DEMO_MEDICO_EMAIL:medico1@tu-tenant.onmicrosoft.com}
+  # ------------------------------------------------------------------
+  # Mensajería (EP3): nombres centralizados del exchange y routing keys de usuarios.
+  # La cola de auditoría y su DLQ las declara ms-notificaciones (el consumidor).
+  # ------------------------------------------------------------------
+  messaging:
+    habilitado: ${MESSAGING_ENABLED:true}
+    exchanges:
+      usuarios-eventos: gestorcitas.usuarios.eventos   # topic
+    routing-keys:
+      usuario-registrado: usuario.registrado
+      usuario-activado: usuario.activado
+      usuario-desactivado: usuario.desactivado
 
 management:
   endpoints:

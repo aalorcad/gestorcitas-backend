@@ -1,4 +1,5 @@
-# GestorCitaCloudNative completo: frontend (nginx) + BFF + ms-catalogo + ms-usuarios + ms-citas.
+# GestorCitaCloudNative completo: frontend (nginx) + BFF + ms-catalogo + ms-usuarios + ms-citas
+# + clúster RabbitMQ (rabbit1, rabbit2) + ms-notificaciones + ms-rabbit-admin (EP3).
 # Es el MISMO archivo en tu Mac y en la EC2.
 #
 # Puertos publicados en la máquina:
@@ -21,6 +22,28 @@ x-java-env: &java-env
   TZ: America/Santiago
   DB_URL: ${DB_URL}
   DB_POOL_SIZE: ${DB_POOL_SIZE:-4}
+
+# Conexión a RabbitMQ: el cliente usa cualquiera de los dos nodos del clúster
+x-rabbit-env: &rabbit-env
+  RABBITMQ_ADDRESSES: rabbit1:5672,rabbit2:5672
+  RABBITMQ_USER: ${RABBITMQ_USER:-gestorcitas}
+  RABBITMQ_PASS: ${RABBITMQ_PASS:?Define RABBITMQ_PASS en el .env}
+
+# Nodo RabbitMQ (se reutiliza para rabbit1 y rabbit2)
+x-rabbit-node: &rabbit-node
+  image: rabbitmq:3.13-management
+  restart: unless-stopped
+  environment:
+    RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-gestorcitas}
+    RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:?Define RABBITMQ_PASS en el .env}
+    RABBITMQ_ERLANG_COOKIE: ${RABBITMQ_ERLANG_COOKIE:?Define RABBITMQ_ERLANG_COOKIE en el .env}
+  healthcheck:
+    test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+    interval: 10s
+    timeout: 10s
+    retries: 12
+    start_period: 20s
+  networks: [backend]
 
 # Wallet opcional (solo si la Autonomous DB exige mTLS). Ver infra/db/oracle/wallet/README.md
 x-wallet: &wallet
@@ -51,6 +74,32 @@ services:
       start_period: 60s
     networks: [backend]
 
+  # ------------------------------------------------------------------
+  # Clúster RabbitMQ de 2 nodos (infra/rabbitmq/README.md)
+  # ------------------------------------------------------------------
+  rabbit1:
+    <<: *rabbit-node
+    hostname: rabbit1
+    container_name: gestorcitas-rabbit1
+    volumes:
+      - ./infra/rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro
+      - rabbit1-data:/var/lib/rabbitmq
+    ports:
+      - "127.0.0.1:15672:15672"   # panel web nodo 1 (solo local)
+
+  rabbit2:
+    <<: *rabbit-node
+    hostname: rabbit2
+    container_name: gestorcitas-rabbit2
+    volumes:
+      - ./infra/rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro
+      - rabbit2-data:/var/lib/rabbitmq
+    depends_on:
+      rabbit1:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:15673:15672"   # panel web nodo 2 (solo local)
+
   ms-catalogo:
     build: ./ms-catalogo
     container_name: gestorcitas-ms-catalogo
@@ -68,7 +117,7 @@ services:
     container_name: gestorcitas-ms-usuarios
     restart: unless-stopped
     environment:
-      <<: *java-env
+      <<: [*java-env, *rabbit-env]
       DB_USER: ${USUARIOS_DB_USER:-USUARIOS}
       DB_PASSWORD: ${USUARIOS_DB_PASSWORD}
       CATALOGO_URL: ${CATALOGO_URL:-http://ms-catalogo:8083}
@@ -76,7 +125,10 @@ services:
       APP_TIMEZONE: America/Santiago
     volumes: *wallet
     depends_on:
-      - ms-catalogo
+      ms-catalogo:
+        condition: service_started
+      rabbit1:
+        condition: service_healthy
     expose: ["8084"]
     networks: [backend]
 
@@ -85,15 +137,55 @@ services:
     container_name: gestorcitas-ms-citas
     restart: unless-stopped
     environment:
-      <<: *java-env
+      <<: [*java-env, *rabbit-env]
       DB_USER: ${CITAS_DB_USER:-CITAS}
       DB_PASSWORD: ${CITAS_DB_PASSWORD}
       USUARIOS_URL: ${USUARIOS_URL:-http://ms-usuarios:8084}
       APP_TIMEZONE: America/Santiago
     volumes: *wallet
     depends_on:
-      - ms-usuarios
+      ms-usuarios:
+        condition: service_started
+      rabbit1:
+        condition: service_healthy
     expose: ["8082"]
+    networks: [backend]
+
+  # Consumidor: notificaciones, comprobantes y auditoría (declara colas, bindings y DLQ)
+  ms-notificaciones:
+    build: ./ms-notificaciones
+    container_name: gestorcitas-ms-notificaciones
+    restart: unless-stopped
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xms64m -Xmx${JAVA_XMX:-384m} -XX:+UseSerialGC"
+      TZ: America/Santiago
+      COMPROBANTES_DIR: /data/comprobantes
+      SIMULAR_DOMINIO_CAIDO: ${SIMULAR_DOMINIO_CAIDO:-falla.test}
+      <<: *rabbit-env
+    volumes:
+      - comprobantes:/data/comprobantes
+    depends_on:
+      rabbit1:
+        condition: service_healthy
+      rabbit2:
+        condition: service_healthy
+    expose: ["8086"]
+    networks: [backend]
+
+  # Administrador de RabbitMQ (API REST); el BFF lo publica en /api/admin/mensajeria
+  ms-rabbit-admin:
+    build: ./ms-rabbit-admin
+    container_name: gestorcitas-ms-rabbit-admin
+    restart: unless-stopped
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xms64m -Xmx${JAVA_XMX:-384m} -XX:+UseSerialGC"
+      TZ: America/Santiago
+      RABBITMQ_MANAGEMENT_URL: http://rabbit1:15672
+      <<: *rabbit-env
+    depends_on:
+      rabbit1:
+        condition: service_healthy
+    expose: ["8085"]
     networks: [backend]
 
   bff:
@@ -114,10 +206,12 @@ services:
       CATALOGO_URL: ${CATALOGO_URL:-http://ms-catalogo:8083}
       CITAS_URL: ${CITAS_URL:-http://ms-citas:8082}
       USUARIOS_URL: ${USUARIOS_URL:-http://ms-usuarios:8084}
+      MENSAJERIA_ADMIN_URL: ${MENSAJERIA_ADMIN_URL:-http://ms-rabbit-admin:8085}
     depends_on:
       - ms-catalogo
       - ms-usuarios
       - ms-citas
+      - ms-rabbit-admin
     ports:
       - "8080:8080"
     networks: [backend]
@@ -142,3 +236,6 @@ networks:
 
 volumes:
   oracle-data:
+  rabbit1-data:
+  rabbit2-data:
+  comprobantes:

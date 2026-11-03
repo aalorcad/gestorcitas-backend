@@ -1,0 +1,26 @@
+app:
+  rabbitmq:
+    # API HTTP de management (plugin rabbitmq_management): solo para LISTAR recursos
+    management:
+      url: ${RABBITMQ_MANAGEMENT_URL:http://localhost:15672}
+      username: ${RABBITMQ_USER:gestorcitas}
+      password: ${RABBITMQ_PASS:gestorcitas}
+      vhost: ${RABBITMQ_VHOST:/}
+  admin:
+    # Recursos de los que depende GestorCitas: la API no permite eliminarlos (ni sus bindings).
+    # Mantener sincronizado con app.messaging de ms-citas, ms-usuarios y ms-notificaciones.
+    recursos-protegidos:
+      - gestorcitas.dlx
+      - gestorcitas.citas.eventos
+      - gestorcitas.citas.comprobantes
+      - gestorcitas.usuarios.eventos
+      - q.notificaciones.citas
+      - q.notificaciones.citas.retry
+      - q.notificaciones.citas.dlq
+      - q.comprobantes.citas
+      - q.comprobantes.citas.retry
+      - q.comprobantes.citas.dlq
+      - q.auditoria.usuarios
+      - q.auditoria.usuarios.retry
+      - q.auditoria.usuarios.dlq
+

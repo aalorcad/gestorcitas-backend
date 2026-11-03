@@ -22,6 +22,14 @@ spring:
   jackson:
     serialization:
       write-dates-as-timestamps: false
+  # RabbitMQ: clúster de 2 nodos (rabbit1, rabbit2). Spring reconecta al otro nodo si uno cae.
+  rabbitmq:
+    addresses: ${RABBITMQ_ADDRESSES:localhost:5672}
+    username: ${RABBITMQ_USER:gestorcitas}
+    password: ${RABBITMQ_PASS:gestorcitas}
+    # Confirmaciones del broker (ACK/NACK de publicación) y devolución de mensajes no enrutables
+    publisher-confirm-type: correlated
+    publisher-returns: true
 
 app:
   zona-horaria: ${APP_TIMEZONE:America/Santiago}
@@ -33,6 +41,21 @@ app:
     duracion-minutos: 30
     dias-habiles: MONDAY,TUESDAY,WEDNESDAY,THURSDAY,FRIDAY
     max-citas-activas-por-especialidad: 1
+  # ------------------------------------------------------------------
+  # Mensajería (EP3): TODOS los nombres de exchanges y routing keys se definen aquí.
+  # Las colas, bindings y DLQ los declara ms-notificaciones (el consumidor).
+  # ------------------------------------------------------------------
+  messaging:
+    habilitado: ${MESSAGING_ENABLED:true}
+    exchanges:
+      citas-eventos: gestorcitas.citas.eventos           # topic
+      citas-comprobantes: gestorcitas.citas.comprobantes # direct
+    routing-keys:
+      cita-creada: cita.creada
+      cita-confirmada: cita.confirmada
+      cita-cancelada: cita.cancelada
+      cita-atendida: cita.atendida
+      comprobante-generar: comprobante.generar
 
 management:
   endpoints:

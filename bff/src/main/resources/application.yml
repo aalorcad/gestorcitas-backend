@@ -30,6 +30,8 @@ app:
     catalogo-url: ${CATALOGO_URL:http://localhost:8083}
     citas-url: ${CITAS_URL:http://localhost:8082}
     usuarios-url: ${USUARIOS_URL:http://localhost:8084}
+    # Microservicio administrador de RabbitMQ (EP3), expuesto en /api/admin/mensajeria (rol Admin)
+    mensajeria-admin-url: ${MENSAJERIA_ADMIN_URL:http://localhost:8085}
 
 management:
   endpoints:
