@@ -32,6 +32,10 @@ app:
     usuarios-url: ${USUARIOS_URL:http://localhost:8084}
     # Microservicio administrador de RabbitMQ (EP3), expuesto en /api/admin/mensajeria (rol Admin)
     mensajeria-admin-url: ${MENSAJERIA_ADMIN_URL:http://localhost:8085}
+    # Microservicio administrador de Kafka (EP5), expuesto en /api/admin/kafka (rol Admin)
+    kafka-admin-url: ${KAFKA_ADMIN_URL:http://localhost:8087}
+    # Indicadores del streaming de Kafka (EP5), expuestos en /api/analitica (rol Admin)
+    analitica-url: ${ANALITICA_URL:http://localhost:8088}
 
 management:
   endpoints:

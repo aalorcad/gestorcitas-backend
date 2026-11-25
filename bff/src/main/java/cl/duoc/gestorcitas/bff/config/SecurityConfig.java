@@ -69,7 +69,10 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/usuarios/medicos").authenticated()
                         // Usuarios: administración
                         .requestMatchers("/api/usuarios/**", "/api/usuarios").hasRole(ADMIN)
+                        // Administración (RabbitMQ en /api/admin/mensajeria, Kafka en /api/admin/kafka)
                         .requestMatchers("/api/admin/**").hasRole(ADMIN)
+                        // Analítica del streaming de Kafka (EP5)
+                        .requestMatchers(HttpMethod.GET, "/api/analitica/**").hasRole(ADMIN)
 
                         // Citas
                         .requestMatchers(HttpMethod.GET, "/api/citas/disponibilidad").authenticated()

@@ -1,0 +1,51 @@
+spring:
+  kafka:
+    bootstrap-servers: localhost:9092
+    admin:
+      # En los tests los tópicos del sistema (RF 3) no se crean: el broker embebido tiene 1 solo nodo
+      auto-create: false
+      fail-fast: false
+
+app:
+  admin:
+    timeout-segundos: 15
+    configuraciones-permitidas:
+      - cleanup.policy
+      - retention.ms
+      - retention.bytes
+      - delete.retention.ms
+      - min.insync.replicas
+      - segment.ms
+      - max.message.bytes
+      - min.cleanable.dirty.ratio
+    topicos-sistema:
+      - nombre: gestorcitas.citas.eventos            # historial de cambios de estado de citas (clave citaId)
+        particiones: 3
+        replicas: 3
+        configuracion:
+          cleanup.policy: delete
+          retention.ms: "604800000"                  # 7 días: ventana para reprocesar/analizar
+          min.insync.replicas: "2"
+      - nombre: gestorcitas.usuarios.estado          # último estado de cada usuario (clave usuarioId)
+        particiones: 3
+        replicas: 3
+        configuracion:
+          cleanup.policy: compact                    # conserva el último registro de cada clave
+          min.cleanable.dirty.ratio: "0.1"
+          segment.ms: "3600000"
+          delete.retention.ms: "86400000"            # los tombstones se conservan 1 día
+          min.insync.replicas: "2"
+      - nombre: gestorcitas.citas.eventos.DLT        # registros que fallaron (mismas particiones que el origen)
+        particiones: 3
+        replicas: 3
+        configuracion:
+          cleanup.policy: delete
+          retention.ms: "1209600000"                 # 14 días para investigar
+          min.insync.replicas: "2"
+      - nombre: gestorcitas.usuarios.estado.DLT
+        particiones: 3
+        replicas: 3
+        configuracion:
+          cleanup.policy: delete
+          retention.ms: "1209600000"
+          min.insync.replicas: "2"

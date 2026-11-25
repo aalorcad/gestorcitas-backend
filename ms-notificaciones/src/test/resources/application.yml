@@ -1,10 +1,25 @@
 spring:
+  datasource:
+    url: jdbc:h2:mem:notificaciones;MODE=Oracle;DB_CLOSE_DELAY=-1
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
   rabbitmq:
     listener:
       simple:
         # Sin broker en los tests: los listeners no se inician
         auto-startup: false
         acknowledge-mode: manual
+  kafka:
+    consumer:
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      properties:
+        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JsonDeserializer
+        spring.json.use.type.headers: false
 
 app:
   # ------------------------------------------------------------------
@@ -44,3 +59,13 @@ app:
   simulacion:
     dominio-correo-caido: ${SIMULAR_DOMINIO_CAIDO:falla.test}
 
+  # Sin clúster Kafka en los tests: el listener no se inicia
+  kafka:
+    habilitado: false
+    grupo: historial-citas
+    topicos:
+      citas-eventos: gestorcitas.citas.eventos
+    reintentos:
+      maximo: 3
+      espera-ms: 100
+    sufijo-dlt: .DLT                      # tópico de errores = <tópico>.DLT (scripts/topicos.sh del repo gestorcitas-kafka)

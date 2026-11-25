@@ -1,0 +1,68 @@
+server:
+  port: ${SERVER_PORT:8087}
+
+spring:
+  application:
+    name: ms-kafka-admin
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092,localhost:9093,localhost:9094}
+    admin:
+      # Al arrancar, KafkaAdmin crea los tópicos declarados como NewTopic que no existan
+      auto-create: ${KAFKA_ADMIN_AUTO_CREATE:true}
+      # Si el clúster aún no está disponible, el servicio arranca igual (la API responde 503 hasta que Kafka vuelva)
+      fail-fast: false
+
+app:
+  admin:
+    timeout-segundos: ${KAFKA_ADMIN_TIMEOUT:15}
+    configuraciones-permitidas:
+      - cleanup.policy
+      - retention.ms
+      - retention.bytes
+      - delete.retention.ms
+      - min.insync.replicas
+      - segment.ms
+      - max.message.bytes
+      - min.cleanable.dirty.ratio
+    # Tópicos de los que depende GestorCitas (protegidos). Mantener sincronizado con app.kafka de ms-citas,
+    # ms-usuarios, ms-analitica y ms-notificaciones, y con scripts/topicos.sh del repo gestorcitas-kafka
+    topicos-sistema:
+      - nombre: gestorcitas.citas.eventos            # historial de cambios de estado de citas (clave citaId)
+        particiones: 3
+        replicas: 3
+        configuracion:
+          cleanup.policy: delete
+          retention.ms: "604800000"                  # 7 días: ventana para reprocesar/analizar
+          min.insync.replicas: "2"
+      - nombre: gestorcitas.usuarios.estado          # último estado de cada usuario (clave usuarioId)
+        particiones: 3
+        replicas: 3
+        configuracion:
+          cleanup.policy: compact                    # conserva el último registro de cada clave
+          min.cleanable.dirty.ratio: "0.1"
+          segment.ms: "3600000"
+          delete.retention.ms: "86400000"            # los tombstones se conservan 1 día
+          min.insync.replicas: "2"
+      - nombre: gestorcitas.citas.eventos.DLT        # registros que fallaron (mismas particiones que el origen)
+        particiones: 3
+        replicas: 3
+        configuracion:
+          cleanup.policy: delete
+          retention.ms: "1209600000"                 # 14 días para investigar
+          min.insync.replicas: "2"
+      - nombre: gestorcitas.usuarios.estado.DLT
+        particiones: 3
+        replicas: 3
+        configuracion:
+          cleanup.policy: delete
+          retention.ms: "1209600000"
+          min.insync.replicas: "2"
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

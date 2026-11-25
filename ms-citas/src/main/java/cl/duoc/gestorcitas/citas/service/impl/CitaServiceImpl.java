@@ -10,6 +10,7 @@ import cl.duoc.gestorcitas.citas.exception.ForbiddenOperationException;
 import cl.duoc.gestorcitas.citas.exception.ResourceNotFoundException;
 import cl.duoc.gestorcitas.citas.mapper.CitaMapper;
 import cl.duoc.gestorcitas.citas.messaging.CitaEventPublisher;
+import cl.duoc.gestorcitas.citas.messaging.CitaStreamPublisher;
 import cl.duoc.gestorcitas.citas.messaging.TipoEventoCita;
 import cl.duoc.gestorcitas.citas.repository.CitaRepository;
 import cl.duoc.gestorcitas.citas.service.CitaService;
@@ -28,8 +29,9 @@ import java.util.stream.Collectors;
 /**
  * Contiene TODAS las reglas de negocio de las citas médicas.
  * <p>
- * Para la mensajería solo usa la interfaz {@link CitaEventPublisher}: no conoce RabbitMQ,
- * exchanges ni routing keys. Los eventos se publican después del commit.
+ * Para la mensajería solo usa las interfaces {@link CitaEventPublisher} (RabbitMQ) y
+ * {@link CitaStreamPublisher} (Kafka): no conoce brokers, exchanges ni tópicos.
+ * Los eventos se publican después del commit.
  */
 @Service
 @RequiredArgsConstructor
@@ -43,6 +45,7 @@ public class CitaServiceImpl implements CitaService {
     private final AgendaProperties agenda;
     private final Clock clock;
     private final CitaEventPublisher eventos;
+    private final CitaStreamPublisher streaming;
 
     // ------------------------------------------------------------------ Paciente
 
@@ -98,6 +101,7 @@ public class CitaServiceImpl implements CitaService {
         Cita guardada = citaRepository.save(cita);
         eventos.publicarCambioDeEstado(guardada, TipoEventoCita.CREADA);
         eventos.solicitarComprobante(guardada);
+        streaming.publicar(guardada, TipoEventoCita.CREADA);
         return mapper.toResponse(guardada);
     }
 
@@ -243,7 +247,9 @@ public class CitaServiceImpl implements CitaService {
         cita.setEstado(nuevoEstado);
         cita.setActualizadaEn(ahora());
         Cita guardada = citaRepository.save(cita);
-        eventos.publicarCambioDeEstado(guardada, TipoEventoCita.desdeEstado(nuevoEstado));
+        TipoEventoCita tipo = TipoEventoCita.desdeEstado(nuevoEstado);
+        eventos.publicarCambioDeEstado(guardada, tipo);
+        streaming.publicar(guardada, tipo);
         return mapper.toResponse(guardada);
     }
 

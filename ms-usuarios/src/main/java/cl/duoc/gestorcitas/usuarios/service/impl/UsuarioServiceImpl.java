@@ -11,6 +11,7 @@ import cl.duoc.gestorcitas.usuarios.exception.ResourceNotFoundException;
 import cl.duoc.gestorcitas.usuarios.mapper.UsuarioMapper;
 import cl.duoc.gestorcitas.usuarios.messaging.TipoEventoUsuario;
 import cl.duoc.gestorcitas.usuarios.messaging.UsuarioEventPublisher;
+import cl.duoc.gestorcitas.usuarios.messaging.UsuarioStreamPublisher;
 import cl.duoc.gestorcitas.usuarios.repository.PerfilPacienteRepository;
 import cl.duoc.gestorcitas.usuarios.repository.UsuarioRepository;
 import cl.duoc.gestorcitas.usuarios.service.UsuarioService;
@@ -31,7 +32,8 @@ import java.util.Set;
 
 /**
  * Reglas de negocio de los usuarios (pacientes, médicos y administradores).
- * Los eventos de auditoría se publican a través de {@link UsuarioEventPublisher} (sin conocer RabbitMQ).
+ * Los eventos de auditoría se publican a través de {@link UsuarioEventPublisher} (RabbitMQ) y el estado del
+ * usuario a través de {@link UsuarioStreamPublisher} (Kafka), sin conocer los brokers.
  */
 @Service
 @RequiredArgsConstructor
@@ -45,6 +47,7 @@ public class UsuarioServiceImpl implements UsuarioService {
     private final EspecialidadResolver especialidades;
     private final Clock clock;
     private final UsuarioEventPublisher eventos;
+    private final UsuarioStreamPublisher streaming;
 
     // ------------------------------------------------------------------ Usuario autenticado
 
@@ -76,6 +79,7 @@ public class UsuarioServiceImpl implements UsuarioService {
         Usuario guardado = usuarioRepository.save(usuario);
         if (esNuevo) {
             eventos.publicar(guardado, TipoEventoUsuario.REGISTRADO, ctx.id());
+            streaming.publicar(guardado, TipoEventoUsuario.REGISTRADO);
         }
         return responder(guardado);
     }
@@ -172,6 +176,7 @@ public class UsuarioServiceImpl implements UsuarioService {
         usuario.setActivo(true);
         Usuario guardado = usuarioRepository.save(usuario);
         eventos.publicar(guardado, TipoEventoUsuario.ACTIVADO, ctx.id());
+        streaming.publicar(guardado, TipoEventoUsuario.ACTIVADO);
         return responder(guardado);
     }
 
@@ -190,6 +195,7 @@ public class UsuarioServiceImpl implements UsuarioService {
         usuario.setActivo(false);
         Usuario guardado = usuarioRepository.save(usuario);
         eventos.publicar(guardado, TipoEventoUsuario.DESACTIVADO, ctx.id());
+        streaming.publicar(guardado, TipoEventoUsuario.DESACTIVADO);
         return responder(guardado);
     }
 

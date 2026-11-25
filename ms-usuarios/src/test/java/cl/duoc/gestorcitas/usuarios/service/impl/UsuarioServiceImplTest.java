@@ -8,6 +8,7 @@ import cl.duoc.gestorcitas.usuarios.exception.BusinessException;
 import cl.duoc.gestorcitas.usuarios.mapper.UsuarioMapper;
 import cl.duoc.gestorcitas.usuarios.messaging.TipoEventoUsuario;
 import cl.duoc.gestorcitas.usuarios.messaging.UsuarioEventPublisher;
+import cl.duoc.gestorcitas.usuarios.messaging.UsuarioStreamPublisher;
 import cl.duoc.gestorcitas.usuarios.repository.PerfilPacienteRepository;
 import cl.duoc.gestorcitas.usuarios.repository.UsuarioRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -40,12 +41,14 @@ class UsuarioServiceImplTest {
     private EspecialidadResolver especialidades;
     @Mock
     private UsuarioEventPublisher eventos;
+    @Mock
+    private UsuarioStreamPublisher streaming;
 
     private UsuarioServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        service = new UsuarioServiceImpl(usuarioRepository, perfilPacienteRepository, new UsuarioMapper(), especialidades, CLOCK, eventos);
+        service = new UsuarioServiceImpl(usuarioRepository, perfilPacienteRepository, new UsuarioMapper(), especialidades, CLOCK, eventos, streaming);
     }
 
     @Test
@@ -67,6 +70,7 @@ class UsuarioServiceImplTest {
         assertThat(r.perfilMedico().especialidadNombre()).isEqualTo("Medicina General");
         // Usuario ya existente (pre-registrado): no es un registro nuevo
         verify(eventos, never()).publicar(any(), any(), any());
+        verify(streaming, never()).publicar(any(), any());
     }
 
     @Test
@@ -81,6 +85,7 @@ class UsuarioServiceImplTest {
         assertThat(r.perfilPaciente()).isNotNull();
         assertThat(r.perfilPaciente().completo()).isFalse();
         verify(eventos).publicar(any(Usuario.class), eq(TipoEventoUsuario.REGISTRADO), eq("oid-p"));
+        verify(streaming).publicar(any(Usuario.class), eq(TipoEventoUsuario.REGISTRADO));
     }
 
     @Test
@@ -104,7 +109,7 @@ class UsuarioServiceImplTest {
 
         assertThatThrownBy(() -> service.desactivar(3L, new UsuarioContexto("oid-admin", "Admin", "admin@demo.cl", Set.of("Admin"))))
                 .isInstanceOf(BusinessException.class);
-        verifyNoInteractions(eventos);
+        verifyNoInteractions(eventos, streaming);
     }
 
     @Test
@@ -118,5 +123,6 @@ class UsuarioServiceImplTest {
 
         assertThat(r.activo()).isFalse();
         verify(eventos).publicar(paciente, TipoEventoUsuario.DESACTIVADO, "oid-admin");
+        verify(streaming).publicar(paciente, TipoEventoUsuario.DESACTIVADO);
     }
 }

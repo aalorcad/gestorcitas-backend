@@ -1,6 +1,10 @@
-# GestorCitaCloudNative completo: frontend (nginx) + BFF + ms-catalogo + ms-usuarios + ms-citas
-# + clúster RabbitMQ (rabbit1, rabbit2) + ms-notificaciones + ms-rabbit-admin (EP3).
-# Es el MISMO archivo en tu Mac y en la EC2.
+# GestorCitaCloudNative completo (entorno local): frontend (nginx) + BFF + ms-catalogo + ms-usuarios + ms-citas
+# + ms-notificaciones + ms-rabbit-admin (EP3) + ms-analitica (2 instancias) + ms-kafka-admin (EP5).
+#
+# Los brokers viven en sus propios repositorios y se levantan ANTES (crean las redes que usa este archivo):
+#   (cd gestorcitas-rabbitmq && docker compose up -d)     -> red "gestorcitas-rabbitmq" (rabbit1, rabbit2)
+#   (cd gestorcitas-kafka && docker compose up -d)        -> red "gestorcitas-kafka" (3 Zookeeper, 3 brokers, Kafka UI)
+#   docker compose up -d --build
 #
 # Puertos publicados en la máquina:
 #   80   -> frontend (React servido por nginx)      <- API Gateway: GET / y GET /{proxy+}
@@ -23,27 +27,31 @@ x-java-env: &java-env
   DB_URL: ${DB_URL}
   DB_POOL_SIZE: ${DB_POOL_SIZE:-4}
 
-# Conexión a RabbitMQ: el cliente usa cualquiera de los dos nodos del clúster
+# Conexión a RabbitMQ (repo gestorcitas-rabbitmq): el cliente usa cualquiera de los dos nodos del clúster
 x-rabbit-env: &rabbit-env
   RABBITMQ_ADDRESSES: rabbit1:5672,rabbit2:5672
   RABBITMQ_USER: ${RABBITMQ_USER:-gestorcitas}
   RABBITMQ_PASS: ${RABBITMQ_PASS:?Define RABBITMQ_PASS en el .env}
 
-# Nodo RabbitMQ (se reutiliza para rabbit1 y rabbit2)
-x-rabbit-node: &rabbit-node
-  image: rabbitmq:3.13-management
+# Conexión a Kafka (repo gestorcitas-kafka): listener INTERNAL de los 3 brokers (red gestorcitas-kafka)
+x-kafka-env: &kafka-env
+  KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka1:29092,kafka2:29092,kafka3:29092}
+
+# Consumidor Kafka ms-analitica (se reutiliza para sus 2 instancias del grupo "analitica")
+x-analitica: &analitica
+  build: ./ms-analitica
+  image: gestorcitas-ms-analitica
   restart: unless-stopped
   environment:
-    RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-gestorcitas}
-    RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:?Define RABBITMQ_PASS en el .env}
-    RABBITMQ_ERLANG_COOKIE: ${RABBITMQ_ERLANG_COOKIE:?Define RABBITMQ_ERLANG_COOKIE en el .env}
-  healthcheck:
-    test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-    interval: 10s
-    timeout: 10s
-    retries: 12
-    start_period: 20s
-  networks: [backend]
+    <<: [*java-env, *kafka-env]
+    DB_USER: ${ANALITICA_DB_USER:-ANALITICA}
+    DB_PASSWORD: ${ANALITICA_DB_PASSWORD:?Define ANALITICA_DB_PASSWORD en el .env}
+    DB_POOL_SIZE: 2
+    APP_TIMEZONE: America/Santiago
+  volumes:
+    - ./infra/db/oracle/wallet:/opt/oracle/wallet:ro
+  expose: ["8088"]
+  networks: [backend, kafka]
 
 # Wallet opcional (solo si la Autonomous DB exige mTLS). Ver infra/db/oracle/wallet/README.md
 x-wallet: &wallet
@@ -74,32 +82,6 @@ services:
       start_period: 60s
     networks: [backend]
 
-  # ------------------------------------------------------------------
-  # Clúster RabbitMQ de 2 nodos (infra/rabbitmq/README.md)
-  # ------------------------------------------------------------------
-  rabbit1:
-    <<: *rabbit-node
-    hostname: rabbit1
-    container_name: gestorcitas-rabbit1
-    volumes:
-      - ./infra/rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro
-      - rabbit1-data:/var/lib/rabbitmq
-    ports:
-      - "127.0.0.1:15672:15672"   # panel web nodo 1 (solo local)
-
-  rabbit2:
-    <<: *rabbit-node
-    hostname: rabbit2
-    container_name: gestorcitas-rabbit2
-    volumes:
-      - ./infra/rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro
-      - rabbit2-data:/var/lib/rabbitmq
-    depends_on:
-      rabbit1:
-        condition: service_healthy
-    ports:
-      - "127.0.0.1:15673:15672"   # panel web nodo 2 (solo local)
-
   ms-catalogo:
     build: ./ms-catalogo
     container_name: gestorcitas-ms-catalogo
@@ -117,7 +99,7 @@ services:
     container_name: gestorcitas-ms-usuarios
     restart: unless-stopped
     environment:
-      <<: [*java-env, *rabbit-env]
+      <<: [*java-env, *rabbit-env, *kafka-env]
       DB_USER: ${USUARIOS_DB_USER:-USUARIOS}
       DB_PASSWORD: ${USUARIOS_DB_PASSWORD}
       CATALOGO_URL: ${CATALOGO_URL:-http://ms-catalogo:8083}
@@ -127,17 +109,15 @@ services:
     depends_on:
       ms-catalogo:
         condition: service_started
-      rabbit1:
-        condition: service_healthy
     expose: ["8084"]
-    networks: [backend]
+    networks: [backend, rabbitmq, kafka]
 
   ms-citas:
     build: ./ms-citas
     container_name: gestorcitas-ms-citas
     restart: unless-stopped
     environment:
-      <<: [*java-env, *rabbit-env]
+      <<: [*java-env, *rabbit-env, *kafka-env]
       DB_USER: ${CITAS_DB_USER:-CITAS}
       DB_PASSWORD: ${CITAS_DB_PASSWORD}
       USUARIOS_URL: ${USUARIOS_URL:-http://ms-usuarios:8084}
@@ -146,10 +126,8 @@ services:
     depends_on:
       ms-usuarios:
         condition: service_started
-      rabbit1:
-        condition: service_healthy
     expose: ["8082"]
-    networks: [backend]
+    networks: [backend, rabbitmq, kafka]
 
   # Consumidor: notificaciones, comprobantes y auditoría (declara colas, bindings y DLQ)
   ms-notificaciones:
@@ -161,16 +139,16 @@ services:
       TZ: America/Santiago
       COMPROBANTES_DIR: /data/comprobantes
       SIMULAR_DOMINIO_CAIDO: ${SIMULAR_DOMINIO_CAIDO:-falla.test}
-      <<: *rabbit-env
+      # Oracle: esquema NOTIFICACIONES (historial de lo procesado). Pool pequeño: la ADB Always Free admite pocas sesiones
+      DB_URL: ${DB_URL}
+      DB_USER: ${NOTIFICACIONES_DB_USER:-NOTIFICACIONES}
+      DB_PASSWORD: ${NOTIFICACIONES_DB_PASSWORD:?Define NOTIFICACIONES_DB_PASSWORD en el .env}
+      DB_POOL_SIZE: 2
+      <<: [*rabbit-env, *kafka-env]
     volumes:
       - comprobantes:/data/comprobantes
-    depends_on:
-      rabbit1:
-        condition: service_healthy
-      rabbit2:
-        condition: service_healthy
     expose: ["8086"]
-    networks: [backend]
+    networks: [backend, rabbitmq, kafka]
 
   # Administrador de RabbitMQ (API REST); el BFF lo publica en /api/admin/mensajeria
   ms-rabbit-admin:
@@ -182,11 +160,31 @@ services:
       TZ: America/Santiago
       RABBITMQ_MANAGEMENT_URL: http://rabbit1:15672
       <<: *rabbit-env
-    depends_on:
-      rabbit1:
-        condition: service_healthy
     expose: ["8085"]
-    networks: [backend]
+    networks: [backend, rabbitmq]
+
+  # ------------------------------------------------------------------
+  # Kafka (EP5): consumidor de analítica (2 instancias, mismo grupo) y administrador del clúster
+  # ------------------------------------------------------------------
+  ms-analitica:
+    <<: *analitica
+    container_name: gestorcitas-ms-analitica-1
+
+  ms-analitica-2:
+    <<: *analitica
+    container_name: gestorcitas-ms-analitica-2
+
+  # Administrador de Kafka (AdminClient); el BFF lo publica en /api/admin/kafka
+  ms-kafka-admin:
+    build: ./ms-kafka-admin
+    container_name: gestorcitas-ms-kafka-admin
+    restart: unless-stopped
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xms64m -Xmx${JAVA_XMX:-384m} -XX:+UseSerialGC"
+      TZ: America/Santiago
+      <<: *kafka-env
+    expose: ["8087"]
+    networks: [backend, kafka]
 
   bff:
     build: ./bff
@@ -207,11 +205,15 @@ services:
       CITAS_URL: ${CITAS_URL:-http://ms-citas:8082}
       USUARIOS_URL: ${USUARIOS_URL:-http://ms-usuarios:8084}
       MENSAJERIA_ADMIN_URL: ${MENSAJERIA_ADMIN_URL:-http://ms-rabbit-admin:8085}
+      KAFKA_ADMIN_URL: ${KAFKA_ADMIN_URL:-http://ms-kafka-admin:8087}
+      ANALITICA_URL: ${ANALITICA_URL:-http://ms-analitica:8088}
     depends_on:
       - ms-catalogo
       - ms-usuarios
       - ms-citas
       - ms-rabbit-admin
+      - ms-kafka-admin
+      - ms-analitica
     ports:
       - "8080:8080"
     networks: [backend]
@@ -233,9 +235,13 @@ services:
 
 networks:
   backend:
+  rabbitmq:
+    name: gestorcitas-rabbitmq   # creada por el repo gestorcitas-rabbitmq
+    external: true
+  kafka:
+    name: gestorcitas-kafka      # creada por el repo gestorcitas-kafka
+    external: true
 
 volumes:
   oracle-data:
-  rabbit1-data:
-  rabbit2-data:
   comprobantes:

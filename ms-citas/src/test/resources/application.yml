@@ -22,3 +22,8 @@ app:
       cita-cancelada: cita.cancelada
       cita-atendida: cita.atendida
       comprobante-generar: comprobante.generar
+  # En tests no se publica a Kafka (no hay clúster)
+  kafka:
+    habilitado: false
+    topicos:
+      citas-eventos: gestorcitas.citas.eventos

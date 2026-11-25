@@ -1,10 +1,16 @@
 # =====================================================================
 # EC2-B  gestorcitas-ms  (IP privada en MS_HOST del BFF)
-# Levanta los microservicios + el clúster RabbitMQ de 2 nodos (EP3/EP4).
+# Levanta los microservicios. El clúster RabbitMQ corre en sus propias instancias:
+#   EC2-D gestorcitas-mq1 (rabbit1) y EC2-E gestorcitas-mq2 (rabbit2)  -> repo gestorcitas-rabbitmq (docker-compose.ec2.yml)
+# Los microservicios se conectan a ambos nodos por IP privada (MQ1_HOST y MQ2_HOST en el .env):
+# si un nodo cae, el cliente se reconecta al otro.
+# El clúster Kafka (EP5) corre en EC2-F gestorcitas-kafka (repo gestorcitas-kafka): los microservicios
+# usan el listener EXTERNAL de sus 3 brokers por IP privada (KAFKA_HOST en el .env, puertos 9092-9094).
 # Solo el BFF (EC2-A) alcanza los microservicios:
-# el Security Group gestorcitas-ms-sg abre 8082-8085 únicamente a gestorcitas-sg.
-# RabbitMQ (5672/15672) NO se publica hacia internet; para ver el panel usa un túnel SSH:
-#   ssh -L 15672:localhost:15672 ec2-user@<IP-EC2-B>
+# el Security Group gestorcitas-ms-sg abre 8082-8088 únicamente a gestorcitas-sg.
+#
+# Memoria: son 8 JVM (ms-analitica corre 2 instancias del grupo "analitica"). En una t3.medium usa
+# JAVA_XMX=256m en el .env de esta instancia.
 #
 #   docker compose -f docker-compose.ec2-ms.yml up -d --build
 # =====================================================================
@@ -15,47 +21,25 @@ x-java-env: &java-env
   DB_URL: ${DB_URL}
   DB_POOL_SIZE: ${DB_POOL_SIZE:-4}
 
+x-kafka-env: &kafka-env
+  KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_HOST:?Define KAFKA_HOST (IP privada de la EC2 de Kafka)}:9092,${KAFKA_HOST}:9093,${KAFKA_HOST}:9094
+
+x-analitica: &analitica
+  build: ./ms-analitica
+  image: gestorcitas-ms-analitica
+  restart: unless-stopped
+  environment:
+    <<: [*java-env, *kafka-env]
+    DB_USER: ${ANALITICA_DB_USER:-ANALITICA}
+    DB_PASSWORD: ${ANALITICA_DB_PASSWORD:?Define ANALITICA_DB_PASSWORD en el .env}
+    DB_POOL_SIZE: 2
+
 x-rabbit-env: &rabbit-env
-  RABBITMQ_ADDRESSES: rabbit1:5672,rabbit2:5672
+  RABBITMQ_ADDRESSES: ${MQ1_HOST:?Define MQ1_HOST (IP privada de EC2-D)}:5672,${MQ2_HOST:?Define MQ2_HOST (IP privada de EC2-E)}:5672
   RABBITMQ_USER: ${RABBITMQ_USER:-gestorcitas}
   RABBITMQ_PASS: ${RABBITMQ_PASS:?Define RABBITMQ_PASS en el .env}
 
-x-rabbit-node: &rabbit-node
-  image: rabbitmq:3.13-management
-  restart: unless-stopped
-  environment:
-    RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-gestorcitas}
-    RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:?Define RABBITMQ_PASS en el .env}
-    RABBITMQ_ERLANG_COOKIE: ${RABBITMQ_ERLANG_COOKIE:?Define RABBITMQ_ERLANG_COOKIE en el .env}
-  healthcheck:
-    test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-    interval: 10s
-    timeout: 10s
-    retries: 12
-    start_period: 20s
-
 services:
-  rabbit1:
-    <<: *rabbit-node
-    hostname: rabbit1
-    container_name: gestorcitas-rabbit1
-    volumes:
-      - ./infra/rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro
-      - rabbit1-data:/var/lib/rabbitmq
-    ports: ["127.0.0.1:15672:15672"]
-
-  rabbit2:
-    <<: *rabbit-node
-    hostname: rabbit2
-    container_name: gestorcitas-rabbit2
-    volumes:
-      - ./infra/rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro
-      - rabbit2-data:/var/lib/rabbitmq
-    depends_on:
-      rabbit1:
-        condition: service_healthy
-    ports: ["127.0.0.1:15673:15672"]
-
   ms-catalogo:
     build: ./ms-catalogo
     container_name: gestorcitas-ms-catalogo
@@ -71,7 +55,7 @@ services:
     container_name: gestorcitas-ms-usuarios
     restart: unless-stopped
     environment:
-      <<: [*java-env, *rabbit-env]
+      <<: [*java-env, *rabbit-env, *kafka-env]
       DB_USER: ${USUARIOS_DB_USER:-USUARIOS}
       DB_PASSWORD: ${USUARIOS_DB_PASSWORD}
       CATALOGO_URL: http://ms-catalogo:8083
@@ -79,8 +63,6 @@ services:
     depends_on:
       ms-catalogo:
         condition: service_started
-      rabbit1:
-        condition: service_healthy
     ports: ["8084:8084"]
 
   ms-citas:
@@ -88,15 +70,13 @@ services:
     container_name: gestorcitas-ms-citas
     restart: unless-stopped
     environment:
-      <<: [*java-env, *rabbit-env]
+      <<: [*java-env, *rabbit-env, *kafka-env]
       DB_USER: ${CITAS_DB_USER:-CITAS}
       DB_PASSWORD: ${CITAS_DB_PASSWORD}
       USUARIOS_URL: http://ms-usuarios:8084
     depends_on:
       ms-usuarios:
         condition: service_started
-      rabbit1:
-        condition: service_healthy
     ports: ["8082:8082"]
 
   ms-notificaciones:
@@ -108,14 +88,14 @@ services:
       TZ: America/Santiago
       COMPROBANTES_DIR: /data/comprobantes
       SIMULAR_DOMINIO_CAIDO: ${SIMULAR_DOMINIO_CAIDO:-falla.test}
-      <<: *rabbit-env
+      # Oracle: esquema NOTIFICACIONES (historial de lo procesado). Pool pequeño: la ADB Always Free admite pocas sesiones
+      DB_URL: ${DB_URL}
+      DB_USER: ${NOTIFICACIONES_DB_USER:-NOTIFICACIONES}
+      DB_PASSWORD: ${NOTIFICACIONES_DB_PASSWORD:?Define NOTIFICACIONES_DB_PASSWORD en el .env}
+      DB_POOL_SIZE: 2
+      <<: [*rabbit-env, *kafka-env]
     volumes:
       - comprobantes:/data/comprobantes
-    depends_on:
-      rabbit1:
-        condition: service_healthy
-      rabbit2:
-        condition: service_healthy
 
   ms-rabbit-admin:
     build: ./ms-rabbit-admin
@@ -124,14 +104,31 @@ services:
     environment:
       JAVA_TOOL_OPTIONS: "-Xms64m -Xmx${JAVA_XMX:-384m} -XX:+UseSerialGC"
       TZ: America/Santiago
-      RABBITMQ_MANAGEMENT_URL: http://rabbit1:15672
+      RABBITMQ_MANAGEMENT_URL: http://${MQ1_HOST}:15672
       <<: *rabbit-env
-    depends_on:
-      rabbit1:
-        condition: service_healthy
     ports: ["8085:8085"]
 
+  # ------------------------------------------------------------------ Kafka (EP5)
+  # 2 instancias del grupo "analitica": Kafka les reparte las particiones. Solo la primera publica el
+  # puerto 8088 para el BFF (ambas leen los mismos datos de Oracle).
+  ms-analitica:
+    <<: *analitica
+    container_name: gestorcitas-ms-analitica-1
+    ports: ["8088:8088"]
+
+  ms-analitica-2:
+    <<: *analitica
+    container_name: gestorcitas-ms-analitica-2
+
+  ms-kafka-admin:
+    build: ./ms-kafka-admin
+    container_name: gestorcitas-ms-kafka-admin
+    restart: unless-stopped
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xms64m -Xmx${JAVA_XMX:-384m} -XX:+UseSerialGC"
+      TZ: America/Santiago
+      <<: *kafka-env
+    ports: ["8087:8087"]
+
 volumes:
-  rabbit1-data:
-  rabbit2-data:
   comprobantes:

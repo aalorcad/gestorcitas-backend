@@ -30,6 +30,22 @@ spring:
     # Confirmaciones del broker (ACK/NACK de publicación) y devolución de mensajes no enrutables
     publisher-confirm-type: correlated
     publisher-returns: true
+  # Apache Kafka (EP5): clúster de 3 brokers. El productor espera la confirmación de todas las
+  # réplicas en sincronía (acks=all) y es idempotente (sin duplicados por reintentos de red).
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092,localhost:9093,localhost:9094}
+    producer:
+      acks: all
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        linger.ms: 5
+        request.timeout.ms: 10000
+        delivery.timeout.ms: 30000
+        # Tiempo máximo que send() espera metadatos si el clúster no responde (no bloquear la API)
+        max.block.ms: 5000
 
 app:
   zona-horaria: ${APP_TIMEZONE:America/Santiago}
@@ -56,6 +72,14 @@ app:
       cita-cancelada: cita.cancelada
       cita-atendida: cita.atendida
       comprobante-generar: comprobante.generar
+  # ------------------------------------------------------------------
+  # Streaming (EP5): tópico Kafka de eventos de citas. Clave = citaId.
+  # El tópico lo crea scripts/topicos.sh del repo gestorcitas-kafka (auto-create desactivado en el clúster).
+  # ------------------------------------------------------------------
+  kafka:
+    habilitado: ${KAFKA_ENABLED:true}
+    topicos:
+      citas-eventos: gestorcitas.citas.eventos
 
 management:
   endpoints:

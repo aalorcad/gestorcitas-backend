@@ -4,6 +4,20 @@ server:
 spring:
   application:
     name: ms-notificaciones
+  # Oracle Autonomous Database, esquema NOTIFICACIONES: guarda lo que procesa cada consumidor
+  # (auditoría de usuarios, notificaciones enviadas y comprobantes generados).
+  datasource:
+    url: ${DB_URL:jdbc:oracle:thin:@//localhost:1521/FREEPDB1}
+    username: ${DB_USER:notificaciones}
+    password: ${DB_PASSWORD}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:2}
+      minimum-idle: 1
+      connection-timeout: 30000
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
   jackson:
     serialization:
       write-dates-as-timestamps: false
@@ -21,6 +35,24 @@ spring:
         default-requeue-rejected: false
         # El servicio arranca aunque las colas aún no existan (las declara RabbitAdmin al conectar)
         missing-queues-fatal: false
+  # Apache Kafka (EP5): consumidor del grupo "historial-citas" (ver app.kafka)
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092,localhost:9093,localhost:9094}
+    consumer:
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      max-poll-records: 50
+      properties:
+        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JsonDeserializer
+        spring.json.use.type.headers: false
+        spring.json.trusted.packages: cl.duoc.gestorcitas.notificaciones.messaging.kafka
+    listener:
+      ack-mode: record
+      # 1 instancia con 3 hilos = 1 consumidor por cada una de las 3 particiones
+      concurrency: ${KAFKA_CONCURRENCIA:3}
+      missing-topics-fatal: false
 
 app:
   # ------------------------------------------------------------------
@@ -59,6 +91,20 @@ app:
   # servidor de correo (error recuperable -> reintentos -> DLQ). Vacío = sin simulación.
   simulacion:
     dominio-correo-caido: ${SIMULAR_DOMINIO_CAIDO:falla.test}
+
+  # ------------------------------------------------------------------
+  # Streaming (EP5): historial de estados de citas leído desde Kafka.
+  # Grupo propio ("historial-citas"): recibe TODOS los eventos aunque ms-analitica también los lea.
+  # ------------------------------------------------------------------
+  kafka:
+    habilitado: ${KAFKA_ENABLED:true}
+    grupo: ${KAFKA_GROUP_ID:historial-citas}
+    topicos:
+      citas-eventos: gestorcitas.citas.eventos
+    reintentos:
+      maximo: ${KAFKA_MAX_INTENTOS:3}
+      espera-ms: ${KAFKA_ESPERA_MS:1000}
+    sufijo-dlt: .DLT                      # tópico de errores = <tópico>.DLT (scripts/topicos.sh del repo gestorcitas-kafka)
 
 management:
   endpoints:

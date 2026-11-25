@@ -1,0 +1,42 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:analitica;MODE=Oracle;DB_CLOSE_DELAY=-1
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      properties:
+        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JsonDeserializer
+        spring.json.use.type.headers: false
+        spring.json.trusted.packages: cl.duoc.gestorcitas.analitica.messaging.event
+    listener:
+      ack-mode: record
+      concurrency: 1
+      missing-topics-fatal: false
+
+app:
+  zona-horaria: America/Santiago
+  kafka:
+    # Sin clúster en los tests: los listeners no se inician.
+    # ConsumoKafkaIntegracionTest usa un broker embebido y los activa (app.kafka.habilitado=true).
+    habilitado: false
+    grupo: analitica
+    topicos:
+      citas-eventos: gestorcitas.citas.eventos
+      usuarios-estado: gestorcitas.usuarios.estado
+    reintentos:
+      maximo: 3
+      espera-ms: 100
+    sufijo-dlt: .DLT                      # tópico de errores = <tópico>.DLT (scripts/topicos.sh del repo gestorcitas-kafka)

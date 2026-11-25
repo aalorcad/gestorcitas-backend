@@ -19,3 +19,8 @@ app:
       usuario-registrado: usuario.registrado
       usuario-activado: usuario.activado
       usuario-desactivado: usuario.desactivado
+  # En tests no se publica a Kafka (no hay clúster)
+  kafka:
+    habilitado: false
+    topicos:
+      usuarios-estado: gestorcitas.usuarios.estado

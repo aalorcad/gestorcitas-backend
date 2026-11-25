@@ -25,4 +25,6 @@ services:
       USUARIOS_URL: http://${MS_HOST}:8084
       CITAS_URL: http://${MS_HOST}:8082
       MENSAJERIA_ADMIN_URL: http://${MS_HOST}:8085
+      KAFKA_ADMIN_URL: http://${MS_HOST}:8087
+      ANALITICA_URL: http://${MS_HOST}:8088
     ports: ["8080:8080"]
