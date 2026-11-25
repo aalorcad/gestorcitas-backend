@@ -4,5 +4,6 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /** URLs internas (red privada) de los microservicios. */
 @ConfigurationProperties(prefix = "app.services")
-public record ServicesProperties(String catalogoUrl, String citasUrl, String usuariosUrl, String mensajeriaAdminUrl) {
+public record ServicesProperties(String catalogoUrl, String citasUrl, String usuariosUrl, String mensajeriaAdminUrl,
+                                 String kafkaAdminUrl, String analiticaUrl) {
 }

@@ -13,6 +13,7 @@ import cl.duoc.gestorcitas.citas.exception.BusinessException;
 import cl.duoc.gestorcitas.citas.exception.ForbiddenOperationException;
 import cl.duoc.gestorcitas.citas.mapper.CitaMapper;
 import cl.duoc.gestorcitas.citas.messaging.CitaEventPublisher;
+import cl.duoc.gestorcitas.citas.messaging.CitaStreamPublisher;
 import cl.duoc.gestorcitas.citas.messaging.TipoEventoCita;
 import cl.duoc.gestorcitas.citas.repository.CitaRepository;
 import cl.duoc.gestorcitas.citas.service.impl.CitaServiceImpl;
@@ -45,6 +46,8 @@ class CitaServiceImplTest {
     private UsuariosClient usuariosClient;
     @Mock
     private CitaEventPublisher eventos;
+    @Mock
+    private CitaStreamPublisher streaming;
 
     private CitaServiceImpl service;
 
@@ -58,7 +61,7 @@ class CitaServiceImplTest {
     @BeforeEach
     void setUp() {
         AgendaProperties agenda = new AgendaProperties(null, null, 30, null, 1);
-        service = new CitaServiceImpl(citaRepository, usuariosClient, new CitaMapper(), agenda, CLOCK, eventos);
+        service = new CitaServiceImpl(citaRepository, usuariosClient, new CitaMapper(), agenda, CLOCK, eventos, streaming);
     }
 
     @Test
@@ -76,6 +79,7 @@ class CitaServiceImplTest {
         // La reserva publica el evento de creación y solicita el comprobante
         verify(eventos).publicarCambioDeEstado(any(Cita.class), eq(TipoEventoCita.CREADA));
         verify(eventos).solicitarComprobante(any(Cita.class));
+        verify(streaming).publicar(any(Cita.class), eq(TipoEventoCita.CREADA));
     }
 
     @Test
@@ -108,7 +112,7 @@ class CitaServiceImplTest {
                 .hasMessageContaining("ya está reservado");
         verify(citaRepository, never()).save(any());
         // Si la regla de negocio falla no se publica nada
-        verifyNoInteractions(eventos);
+        verifyNoInteractions(eventos, streaming);
     }
 
     @Test
@@ -153,5 +157,6 @@ class CitaServiceImplTest {
         assertThat(r.estado()).isEqualTo(EstadoCita.CANCELADA);
         verify(eventos).publicarCambioDeEstado(cita, TipoEventoCita.CANCELADA);
         verify(eventos, never()).solicitarComprobante(any());
+        verify(streaming).publicar(cita, TipoEventoCita.CANCELADA);
     }
 }

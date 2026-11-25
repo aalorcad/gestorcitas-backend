@@ -1,0 +1,67 @@
+server:
+  port: ${SERVER_PORT:8088}
+
+spring:
+  application:
+    name: ms-analitica
+  # Oracle Autonomous Database, esquema ANALITICA: eventos de cita procesados y último estado de usuarios.
+  datasource:
+    url: ${DB_URL:jdbc:oracle:thin:@//localhost:1521/FREEPDB1}
+    username: ${DB_USER:analitica}
+    password: ${DB_PASSWORD}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:2}
+      minimum-idle: 1
+      connection-timeout: 30000
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+  # Apache Kafka (EP5): consumidor del clúster de 3 brokers
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092,localhost:9093,localhost:9094}
+    consumer:
+      # Un grupo nuevo empieza desde el primer registro disponible (reprocesa el historial)
+      auto-offset-reset: earliest
+      # El offset lo confirma el contenedor después de procesar cada registro (ack-mode RECORD)
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # ErrorHandlingDeserializer: si el JSON no se puede leer, el error llega al DefaultErrorHandler
+      # (que lo envía a .DLT) en vez de bloquear la partición con un registro "venenoso"
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      max-poll-records: 50
+      properties:
+        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JsonDeserializer
+        # Sin cabeceras de tipo Java: cada listener indica su clase destino (spring.json.value.default.type)
+        spring.json.use.type.headers: false
+        spring.json.trusted.packages: cl.duoc.gestorcitas.analitica.messaging.event
+    listener:
+      ack-mode: record
+      # Hilos consumidores POR INSTANCIA. Cada tópico tiene 3 particiones y corren 2 instancias del grupo:
+      # Kafka reparte 2 + 1 particiones; si una instancia se detiene, la otra toma las 3 (rebalance).
+      # Dentro de un grupo hay como máximo 1 consumidor activo por partición.
+      concurrency: ${KAFKA_CONCURRENCIA:1}
+      # El servicio arranca aunque el tópico aún no exista (lo crea scripts/topicos.sh del repo gestorcitas-kafka)
+      missing-topics-fatal: false
+
+app:
+  zona-horaria: ${APP_TIMEZONE:America/Santiago}
+  kafka:
+    habilitado: ${KAFKA_ENABLED:true}   # false: los listeners no se inician
+    grupo: ${KAFKA_GROUP_ID:analitica}
+    topicos:
+      citas-eventos: gestorcitas.citas.eventos
+      usuarios-estado: gestorcitas.usuarios.estado
+    reintentos:
+      maximo: ${KAFKA_MAX_INTENTOS:3}     # intentos totales antes de enviar a .DLT
+      espera-ms: ${KAFKA_ESPERA_MS:1000}  # espera fija entre intentos
+    sufijo-dlt: .DLT                      # tópico de errores = <tópico>.DLT (scripts/topicos.sh del repo gestorcitas-kafka)
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

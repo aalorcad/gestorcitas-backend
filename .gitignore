@@ -10,6 +10,9 @@ dist/
 infra/db/oracle/wallet/*
 !infra/db/oracle/wallet/README.md
 frontend/
+# Repositorios propios, clonados junto al backend
+gestorcitas-kafka/
+gestorcitas-rabbitmq/
 
 # Material de entrega (informe, presentación, imágenes): fuera de Git
 Entrega_EP3_GestorCitas/

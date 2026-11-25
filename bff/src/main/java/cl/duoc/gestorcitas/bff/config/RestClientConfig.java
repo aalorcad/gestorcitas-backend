@@ -36,6 +36,16 @@ public class RestClientConfig {
         return RestClient.builder().baseUrl(services.mensajeriaAdminUrl()).requestFactory(factory()).build();
     }
 
+    @Bean
+    public RestClient kafkaAdminRestClient(ServicesProperties services) {
+        return RestClient.builder().baseUrl(services.kafkaAdminUrl()).requestFactory(factory()).build();
+    }
+
+    @Bean
+    public RestClient analiticaRestClient(ServicesProperties services) {
+        return RestClient.builder().baseUrl(services.analiticaUrl()).requestFactory(factory()).build();
+    }
+
     private JdkClientHttpRequestFactory factory() {
         HttpClient httpClient = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)

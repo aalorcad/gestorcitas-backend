@@ -92,7 +92,7 @@ curl -X DELETE localhost:8085/queues/q.demo                                     
 
 ```bash
 cp .env.example .env            # completar RABBITMQ_PASS y RABBITMQ_ERLANG_COOKIE
-docker compose up -d --build rabbit1 rabbit2
+(cd gestorcitas-rabbitmq && docker compose up -d)   # desde la EP5 el clúster vive en el repo gestorcitas-rabbitmq
 docker exec gestorcitas-rabbit1 rabbitmqctl cluster_status   # 2 nodos
 docker compose up -d --build                                  # resto de servicios
 ```

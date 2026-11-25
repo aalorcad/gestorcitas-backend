@@ -2,6 +2,8 @@ package cl.duoc.gestorcitas.bff;
 
 import cl.duoc.gestorcitas.bff.service.CatalogoService;
 import cl.duoc.gestorcitas.bff.service.CitaService;
+import cl.duoc.gestorcitas.bff.service.AnaliticaService;
+import cl.duoc.gestorcitas.bff.service.KafkaAdminService;
 import cl.duoc.gestorcitas.bff.service.MensajeriaAdminService;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import cl.duoc.gestorcitas.bff.service.UsuarioService;
@@ -38,6 +40,10 @@ class SecurityConfigTest {
     private UsuarioService usuarioService;
     @MockitoBean
     private MensajeriaAdminService mensajeriaAdminService;
+    @MockitoBean
+    private KafkaAdminService kafkaAdminService;
+    @MockitoBean
+    private AnaliticaService analiticaService;
 
     @Test
     void sinTokenResponde401() throws Exception {
@@ -117,6 +123,36 @@ class SecurityConfigTest {
     void adminPuedeListarColas() throws Exception {
         when(mensajeriaAdminService.listarColas()).thenReturn(JsonNodeFactory.instance.arrayNode());
         mvc.perform(get("/api/admin/mensajeria/queues")
+                        .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_Admin"))))
+                .andExpect(status().isOk());
+    }
+
+    // ------------------------------------------------------------------ Kafka y analítica (EP5)
+
+    @Test
+    void sinTokenNoSeAdministraKafka() throws Exception {
+        mvc.perform(get("/api/admin/kafka/topics")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/analitica/resumen")).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void medicoNoPuedeAdministrarKafkaNiVerAnalitica() throws Exception {
+        mvc.perform(get("/api/admin/kafka/consumer-groups")
+                        .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_Medico"))))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/api/analitica/resumen")
+                        .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_Paciente"))))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void adminPuedeListarTopicosYVerAnalitica() throws Exception {
+        when(kafkaAdminService.listarTopicos()).thenReturn(JsonNodeFactory.instance.arrayNode());
+        when(analiticaService.resumen()).thenReturn(JsonNodeFactory.instance.objectNode());
+        mvc.perform(get("/api/admin/kafka/topics")
+                        .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_Admin"))))
+                .andExpect(status().isOk());
+        mvc.perform(get("/api/analitica/resumen")
                         .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_Admin"))))
                 .andExpect(status().isOk());
     }
