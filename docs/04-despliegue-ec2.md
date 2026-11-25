@@ -1,5 +1,8 @@
 # 4. Despliegue en AWS: frontend en EC2-C, BFF en EC2-A y microservicios en EC2-B
 
+> **EP5:** se agregan EC2-D y EC2-E (un nodo RabbitMQ cada una, repo `gestorcitas-rabbitmq`) y EC2-F (Kafka, repo `gestorcitas-kafka`).
+> Ver la sección [4.9](#49-ep5-rabbitmq-y-kafka-en-sus-propias-ec2).
+
 AWS API Gateway es el único punto público y entrega HTTPS (requisito de Entra ID para el login):
 `/` sirve el frontend (EC2-C) y `/api/...` va al BFF (EC2-A). EC2-A y EC2-B clonan `gestorcitas-backend`;
 EC2-C clona `gestorcitas-frontend`. En desarrollo el frontend también puede correr local (`npm run dev`).
@@ -37,7 +40,9 @@ EC2-C clona `gestorcitas-frontend`. En desarrollo el frontend también puede cor
 | SG | Instancia | Reglas de entrada |
 |---|---|---|
 | `gestorcitas-sg` | EC2-A (BFF) | SSH 22 desde *Mi IP* · TCP 8080 desde 0.0.0.0/0 (API Gateway llama por internet; sin token el BFF responde 401) |
-| `gestorcitas-ms-sg` | EC2-B (microservicios) | SSH 22 desde *Mi IP* · TCP 8082-8085 **solo** desde el SG `gestorcitas-sg` (8085 = ms-rabbit-admin). RabbitMQ (5672/15672) no se abre: el panel se ve con `ssh -L 15672:localhost:15672` |
+| `gestorcitas-ms-sg` | EC2-B (microservicios) | SSH 22 desde *Mi IP* · TCP 8082-8088 **solo** desde el SG `gestorcitas-sg` (8085 ms-rabbit-admin, 8087 ms-kafka-admin, 8088 ms-analitica) |
+| `gestorcitas-mq-sg` | EC2-D / EC2-E (RabbitMQ) | SSH 22 desde *Mi IP* · 5672 y 15672 desde `gestorcitas-ms-sg` · 4369 y 25672 desde el propio `gestorcitas-mq-sg` |
+| `gestorcitas-kafka-sg` | EC2-F (Kafka) | SSH 22 y 8090 (Kafka UI) desde *Mi IP* · 9092-9094 desde `gestorcitas-ms-sg` |
 
 > En otra red (por ejemplo la sala de clases) edita la regla SSH y vuelve a elegir *Mi IP*.
 
@@ -156,3 +161,20 @@ Logs: `docker logs --tail 40 gestorcitas-bff` (EC2-A) · `docker logs --tail 40 
 - **Detener:** EC2 → selecciona ambas → *Estado de la instancia → Detener*. Nunca *Terminar* ni liberar las IP elásticas.
 - **Iniciar:** *Start Lab* → EC2 → *Iniciar instancia*. Las IP no cambian y los contenedores arrancan solos (`restart: unless-stopped`).
 - API Gateway no se apaga ni cobra sin peticiones. Oracle Always Free se detiene tras 7 días sin uso: iníciala desde OCI.
+
+## 4.9 EP5: RabbitMQ y Kafka en sus propias EC2
+
+| EC2 | Nombre | Tipo | Repositorio | Comando |
+|---|---|---|---|---|
+| D | gestorcitas-mq1 | t3.small | gestorcitas-rabbitmq | `docker compose -f docker-compose.ec2.yml up -d` (`.env`: `RABBIT_NODE=rabbit1`, `RABBIT_PEER=rabbit2`, `RABBIT_PEER_HOST=<IP privada de EC2-E>`) |
+| E | gestorcitas-mq2 | t3.small | gestorcitas-rabbitmq | igual, con `rabbit2` / `rabbit1` / IP privada de EC2-D |
+| F | gestorcitas-kafka | t3.large · 20 GB | gestorcitas-kafka | `docker compose up -d` (`.env`: `KAFKA_ADVERTISED_HOST=<IP privada de EC2-F>`) |
+
+1. Con ambos nodos arriba, en EC2-D: `bash scripts/politica-ha.sh gestorcitas-rabbit1` (replica las colas en los 2 nodos).
+2. En EC2-F: `docker logs gestorcitas-kafka-init` muestra los 4 tópicos con 3 particiones y RF 3. Kafka UI en `http://<IP pública EC2-F>:8090`.
+3. En EC2-B, agregar al `.env`: `MQ1_HOST`, `MQ2_HOST`, `KAFKA_HOST` (IPs privadas), `RABBITMQ_USER/PASS` (los mismos de los nodos),
+   `NOTIFICACIONES_DB_*`, `ANALITICA_DB_*` y `JAVA_XMX=256m`; luego
+   `docker compose -f docker-compose.ec2-ms.yml up -d --build --remove-orphans`.
+4. En EC2-A y EC2-C: `git pull` y `docker compose ... up -d --build` (el BFF toma `KAFKA_ADMIN_URL` y `ANALITICA_URL` de `MS_HOST`).
+
+Las IPs privadas no cambian al detener las instancias; las públicas sí (solo se usan para SSH y Kafka UI).

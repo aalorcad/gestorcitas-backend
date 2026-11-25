@@ -2,7 +2,17 @@
 
 Sistema de **reserva de citas médicas** con arquitectura cloud native:
 React + MSAL (Microsoft Entra ID) → AWS API Gateway (JWT) → BFF Spring Security → microservicios Spring Boot → Oracle Autonomous Database,
-con mensajería asíncrona sobre un clúster RabbitMQ de 2 nodos (colas, exchanges y DLQ) — ver [docs/05-mensajeria-rabbitmq.md](docs/05-mensajeria-rabbitmq.md).
+con mensajería asíncrona sobre un clúster RabbitMQ de 2 nodos (colas, exchanges y DLQ, [docs/05-mensajeria-rabbitmq.md](docs/05-mensajeria-rabbitmq.md))
+y **streaming de eventos con Apache Kafka** (3 Zookeeper, 3 brokers, analítica en tiempo real; ver [Streaming con Kafka](#streaming-con-kafka-ep5)).
+
+El sistema está repartido en **4 repositorios**:
+
+| Repositorio | Contenido |
+|---|---|
+| **gestorcitas-backend** (este) | BFF y microservicios Spring Boot (productores y consumidores de RabbitMQ y Kafka) |
+| [gestorcitas-frontend](https://github.com/aalorcad/gestorcitas-frontend) | React + MSAL |
+| [gestorcitas-rabbitmq](https://github.com/aalorcad/gestorcitas-rabbitmq) | Clúster RabbitMQ de 2 nodos (Docker Compose local y por EC2) |
+| [gestorcitas-kafka](https://github.com/aalorcad/gestorcitas-kafka) | Clúster Kafka: 3 Zookeeper + 3 brokers + Kafka UI + tópicos |
 
 ## Arquitectura
 
@@ -41,6 +51,12 @@ con mensajería asíncrona sobre un clúster RabbitMQ de 2 nodos (colas, exchang
   (después del commit)                 │ RabbitMQ · clúster 2 nodos   │              (correo, comprobante, auditoría,
   BFF /api/admin/mensajeria ─────────► │ topic · direct · DLX · DLQ   │               reintentos y DLQ)
             └──► ms-rabbit-admin :8085 └──────────────────────────────┘
+
+  ms-citas ────► citas.eventos ───┐    ┌──────────────────────────────┐ ──grupo analitica───────► ms-analitica :8088 (×2)
+  ms-usuarios ─► usuarios.estado ─┴──► │ Kafka · 3 Zookeeper          │                            indicadores en tiempo real
+  (después del commit, acks=all)       │ 3 brokers · RF 3 · min ISR 2 │ ──grupo historial-citas─► ms-notificaciones
+  BFF /api/admin/kafka ─► ms-kafka-admin :8087 (AdminClient)          │    errores ──► *.DLT
+                                       └──────────────────────────────┘
 ```
 
 ### Dónde corre cada componente
@@ -50,8 +66,9 @@ con mensajería asíncrona sobre un clúster RabbitMQ de 2 nodos (colas, exchang
 | Frontend React | **EC2-C** `gestorcitas-front` · nginx :80 (en desarrollo: `npm run dev`) | Vía API Gateway `GET /` y `GET /{proxy+}` |
 | API Gateway | AWS HTTP API · frontend + 25 rutas `/api` con autorizador JWT | Sí, HTTPS (único punto público) |
 | BFF | **EC2-A** `gestorcitas-bff` · contenedor :8080 | Solo vía API Gateway |
-| ms-citas · ms-usuarios · ms-catalogo · ms-rabbit-admin | **EC2-B** `gestorcitas-ms` · contenedores :8082 · :8084 · :8083 · :8085 | No: el Security Group solo acepta al BFF (IP privada) |
-| RabbitMQ (rabbit1 + rabbit2) · ms-notificaciones | **EC2-B** · red Docker interna | No (panel por túnel SSH) |
+| ms-citas · ms-usuarios · ms-catalogo · ms-rabbit-admin · ms-kafka-admin · ms-analitica · ms-notificaciones | **EC2-B** `gestorcitas-ms` (t3.large) · :8082 · :8084 · :8083 · :8085 · :8087 · :8088 | No: el Security Group solo acepta al BFF (8082-8088) |
+| RabbitMQ rabbit1 · rabbit2 | **EC2-D** `gestorcitas-mq1` · **EC2-E** `gestorcitas-mq2` (repo gestorcitas-rabbitmq) | No: 5672/15672 solo desde EC2-B |
+| Kafka: 3 Zookeeper + 3 brokers + Kafka UI | **EC2-F** `gestorcitas-kafka` (t3.large, repo gestorcitas-kafka) | No: 9092-9094 solo desde EC2-B; Kafka UI :8090 solo desde la IP del administrador |
 | Base de datos | Oracle Autonomous Database (OCI) | Solo la IP de EC2-B (ACL) |
 | Identidad | Microsoft Entra ID | — |
 
@@ -65,6 +82,8 @@ La aplicación completa se abre en la URL HTTPS de API Gateway (`https://…exec
 | **bff** | Segunda validación JWT, autorización por rol, orquestación y reglas entre servicios |
 | **ms-notificaciones** | Consumidor RabbitMQ: notifica cambios de citas, genera comprobantes y audita usuarios (ACK manual, reintentos, DLQ) |
 | **ms-rabbit-admin** | API REST para crear y eliminar colas, exchanges y bindings (rol Admin vía BFF) |
+| **ms-analitica** (EP5) | Consumidor Kafka (grupo `analitica`, 2 instancias): indicadores en tiempo real en Oracle (esquema ANALITICA) |
+| **ms-kafka-admin** (EP5) | API REST con AdminClient: clúster, tópicos (crear, configurar, particiones) y grupos de consumidores (lag, reinicio de offsets) |
 
 ## Actores y vistas
 
@@ -74,7 +93,7 @@ Cada rol tiene su **propio portal** con inicio, menú lateral y pantallas:
 |---|---|---|
 | **Paciente** | `/paciente` | Inicio (indicadores + próximas citas), **Mi perfil** (RUT, fecha nac., previsión, teléfono), Reservar cita (especialidad → médico → fecha → bloque), Mis citas (cancelar) |
 | **Medico** | `/medico` | Inicio (citas de hoy, por confirmar, atendidas), Mi agenda (confirmar, atender con observaciones), **Mi perfil** (especialidad, registro SIS, teléfono, presentación) |
-| **Admin** | `/admin` | **Panel** (KPIs de usuarios, citas y catálogo), **Usuarios** (filtrar por rol, buscar, activar/desactivar, registrar y editar médicos), Especialidades (CRUD + valor), Citas (filtrar, cancelar) |
+| **Admin** | `/admin` | **Panel** (KPIs de usuarios, citas y catálogo), **Usuarios** (filtrar por rol, buscar, activar/desactivar, registrar y editar médicos), Especialidades (CRUD + valor), Citas (filtrar, cancelar), **Mensajería** (RabbitMQ), **Streaming (Kafka)** (clúster, tópicos, grupos y lag), **Analítica** (indicadores en tiempo real) |
 | Todos | `/sesion` | Claims del token validados por el BFF |
 
 Al entrar a `/` se redirige al portal del rol principal (Admin > Médico > Paciente). Un usuario con varios roles ve todas sus secciones en el menú.
@@ -97,12 +116,15 @@ GestorCitaCloudNative/
 ├── ms-catalogo/       Microservicio de catálogo
 ├── ms-notificaciones/ Consumidor RabbitMQ (notificaciones, comprobantes, auditoría)
 ├── ms-rabbit-admin/   Administrador de RabbitMQ (API REST)
+├── ms-analitica/      Consumidor Kafka: indicadores en tiempo real (EP5)
+├── ms-kafka-admin/    Administrador de Kafka con AdminClient (EP5)
 ├── infra/
 │   ├── db/oracle/     Scripts de esquemas para Autonomous DB (adb/) y Oracle local (local/)
-│   ├── rabbitmq/      Configuración del clúster de 2 nodos
+│   ├── postman/       Colección de pruebas de API Gateway
 │   └── aws/           Script API Gateway + user-data EC2
 ├── docs/              00-guia-paso-a-paso.md · 01-entra-id.md · 01b-entra-external-id.md · 03-oracle-autonomous-db.md · 04-despliegue-ec2.md · 05-mensajeria-rabbitmq.md
-├── docker-compose.yml
+├── docker-compose.yml          Entorno local completo (se une a las redes de RabbitMQ y Kafka)
+├── docker-compose.ec2-*.yml    Un archivo por EC2 (bff, ms)
 ├── mvnw               Maven Wrapper (no requiere Maven instalado)
 └── pom.xml            Agregador Maven
 ```
@@ -117,6 +139,7 @@ cl.duoc.gestorcitas.<servicio>
 ├── controller/    REST: recibe, valida formato (@Valid) y delega
 ├── dto/  mapper/  client/  config/  exception/  util/
 ├── messaging/     RabbitMQ: config/ (nombres + beans), producer/, consumer/<dominio>/, event/ (contratos JSON)
+│                  Kafka: kafka/ (productor, propiedades, eventos) o consumer/ + config/ (manejo de errores y DLT)
 └── security/      (solo BFF) validadores JWT y conversor de roles
 ```
 
@@ -147,11 +170,83 @@ src/
 │   ├── auth/            MSAL: AuthGuard, RoleGuard, login/logout, roles del token
 │   ├── usuarios/        UsuarioGate, perfiles, MedicoPicker, UsuariosAdmin, DashboardAdmin
 │   ├── catalogo/        Especialidades
-│   └── citas/           Reserva, mis citas, agenda, administración de citas
+│   ├── citas/           Reserva, mis citas, agenda, administración de citas
+│   ├── mensajeria/      Administración de RabbitMQ
+│   ├── kafka/           Administración de Kafka (clúster, tópicos, grupos y lag)
+│   └── analitica/       Indicadores en tiempo real
 ├── hooks/  services/ (msal + http con MsalInterceptor)  stores/  types/  utils/
 ```
 
 Guards en cadena (`app/router.tsx`): **AuthGuard** (sesión Entra ID) → **UsuarioGate** (sincronizado y activo) → **RoleGuard** (rol del portal).
+
+## Streaming con Kafka (EP5)
+
+Kafka **complementa** a RabbitMQ sin modificarlo: RabbitMQ sigue a cargo de los comandos puntuales (correo, comprobante,
+auditoría, con reintentos y DLQ) y Kafka mantiene un **log de eventos** que varios grupos leen de forma independiente y pueden releer.
+El clúster (3 Zookeeper, 3 brokers, Kafka UI y creación de tópicos) está en el repositorio
+[gestorcitas-kafka](https://github.com/aalorcad/gestorcitas-kafka).
+
+### Tópicos
+
+| Tópico | Part. | RF | Limpieza | Retención | Clave | Propósito |
+|---|---|---|---|---|---|---|
+| `gestorcitas.citas.eventos` | 3 | 3 | delete | 7 días | `citaId` | Cambios de estado de cada cita; se relee para recalcular indicadores |
+| `gestorcitas.usuarios.estado` | 3 | 3 | compact | último valor por clave (tombstones 1 día) | `usuarioId` | Estado actual de cada usuario |
+| `gestorcitas.citas.eventos.DLT` · `gestorcitas.usuarios.estado.DLT` | 3 | 3 | delete | 14 días | — | Eventos que fallaron, para investigarlos |
+
+`min.insync.replicas=2` en todos y productores con `acks=all` e idempotencia: un evento se confirma cuando está en al menos 2 brokers.
+
+### Productores y consumidores
+
+| Servicio | Rol | Tópico | Grupo | Qué hace |
+|---|---|---|---|---|
+| ms-citas | Productor (`KafkaTemplate`) | citas.eventos | — | Publica CREADA, CONFIRMADA, CANCELADA y ATENDIDA **después del commit** |
+| ms-usuarios | Productor | usuarios.estado | — | Publica el estado completo al registrar, activar o desactivar |
+| ms-analitica (×2) | Consumidor (`@KafkaListener`) | ambos | `analitica` | Guarda eventos y estado de usuarios en Oracle y expone `GET /analitica/resumen` y `/eventos` |
+| ms-notificaciones | Consumidor | citas.eventos | `historial-citas` | Historial de estados de cada cita en Oracle (tabla `historial_citas`) |
+
+Nombres de tópicos, grupos, reintentos y sufijo de DLT están en `app.kafka` de cada `application.yml`; ninguno está escrito en el código.
+
+### Estructura de los eventos (JSON)
+
+**`CitaEventoKafka`** (clave = `citaId`). Productor: `ms-citas/.../messaging/kafka/CitaEventoKafka.java`.
+
+| Campo | Tipo | Para qué sirve |
+|---|---|---|
+| `eventoId` | UUID | Identificador único: el consumidor descarta duplicados (entrega at-least-once) |
+| `tipo` | CREADA · CONFIRMADA · CANCELADA · ATENDIDA | Qué ocurrió con la cita |
+| `citaId` | número | Cita afectada; también es la clave (orden por cita) |
+| `pacienteId` | texto (oid) | Paciente dueño de la cita |
+| `medicoId` · `medicoNombre` | número · texto | Agrupar indicadores por médico sin consultar ms-usuarios |
+| `especialidadId` · `especialidadNombre` | número · texto | Agrupar indicadores por especialidad |
+| `fechaHora` · `estado` | fecha · texto | Datos de la cita después del cambio |
+| `ocurridoEn` | fecha | Momento del cambio |
+
+**`UsuarioEstadoKafka`** (clave = `usuarioId`). Productor: `ms-usuarios/.../messaging/kafka/UsuarioEstadoKafka.java`.
+
+| Campo | Tipo | Para qué sirve |
+|---|---|---|
+| `eventoId` | UUID | Descartar duplicados |
+| `tipo` | REGISTRADO · ACTIVADO · DESACTIVADO | Cambio que originó la publicación |
+| `usuarioId` · `email` · `nombre` | número · texto | Identidad del usuario |
+| `roles` · `activo` | lista · booleano | **Estado completo**: con la compactación solo queda el último registro de cada clave |
+| `actualizadoEn` | fecha | Descartar estados más antiguos que el guardado |
+
+Los consumidores validan cada evento con Bean Validation (`CitaEventoMsg`, `UsuarioEstadoMsg`, `CitaEventoKafkaMsg`).
+
+### Manejo de errores
+
+- `ErrorHandlingDeserializer`: un JSON corrupto no bloquea la partición.
+- `DefaultErrorHandler`: 3 intentos ante errores transitorios y luego `DeadLetterPublishingRecoverer` publica en `<tópico>.DLT`
+  (misma partición, con la causa en las cabeceras). Los eventos inválidos van directo, sin reintentos.
+- Idempotencia por `eventoId` (restricción única en Oracle) y logs con tópico, partición, offset, clave y eventoId.
+
+### Supervisión
+
+```bash
+docker exec gestorcitas-kafka1 kafka-consumer-groups --bootstrap-server kafka1:29092 --describe --group analitica
+```
+También en Kafka UI (pestaña *Consumers*) y en la app: **Administración → Streaming (Kafka) → Grupos de consumidores → Detalle y lag**.
 
 ## Endpoints públicos (vía API Gateway → BFF)
 
@@ -177,6 +272,9 @@ Guards en cadena (`app/router.tsx`): **AuthGuard** (sesión Entra ID) → **Usua
 | GET | `/api/citas/agenda?fecha=` | Medico |
 | PATCH | `/api/citas/{id}/confirmar` · `/atender` | Medico (asignado) |
 | GET | `/api/citas?estado=` | Admin |
+| GET/POST/DELETE | `/api/admin/mensajeria/**` | Admin (RabbitMQ) |
+| GET/POST/PATCH/DELETE | `/api/admin/kafka/**` | Admin (Kafka: `cluster`, `topics`, `consumer-groups`) |
+| GET | `/api/analitica/resumen` · `/api/analitica/eventos?limite=` | Admin |
 
 ## Ejecutar en local
 
@@ -185,10 +283,15 @@ Guards en cadena (`app/router.tsx`): **AuthGuard** (sesión Entra ID) → **Usua
 Requisitos: **Java 17+**, Node 20+, Docker. No necesitas Maven: usa `./mvnw`.
 
 1. Configura Entra ID siguiendo **[docs/01-entra-id.md](docs/01-entra-id.md)**. Para que los pacientes **creen su cuenta** desde el frontend usa Entra External ID: **[docs/01b-entra-external-id.md](docs/01b-entra-external-id.md)**.
-2. Crea la Autonomous Database y sus 3 esquemas siguiendo **[docs/03-oracle-autonomous-db.md](docs/03-oracle-autonomous-db.md)**.
-3. Backend:
+2. Crea la Autonomous Database y sus esquemas siguiendo **[docs/03-oracle-autonomous-db.md](docs/03-oracle-autonomous-db.md)**
+   (EP5: además ejecuta `infra/db/oracle/adb/03-esquemas-ep5.sql` para NOTIFICACIONES y ANALITICA).
+3. Brokers y backend (los repos de RabbitMQ y Kafka se clonan dentro de esta carpeta; están en `.gitignore`):
    ```bash
-   cp .env.example .env        # DB_URL + esquemas Oracle, Tenant ID, Client ID de la API, email del médico demo
+   git clone https://github.com/aalorcad/gestorcitas-rabbitmq.git
+   git clone https://github.com/aalorcad/gestorcitas-kafka.git
+   (cd gestorcitas-rabbitmq && cp .env.example .env && docker compose up -d)   # completar claves en .env
+   (cd gestorcitas-kafka && cp .env.example .env && docker compose up -d)      # Kafka UI: http://localhost:8090
+   cp .env.example .env        # DB_URL + esquemas Oracle, Tenant ID, Client ID de la API, RabbitMQ, email del médico demo
    docker compose up -d --build
    ```
    Sin Autonomous DB todavía: pon `DB_URL=jdbc:oracle:thin:@//oracle-local:1521/FREEPDB1` y usa `docker compose --profile oracle-local up -d --build` (Oracle Free en Docker con los mismos esquemas).
@@ -202,6 +305,8 @@ Requisitos: **Java 17+**, Node 20+, Docker. No necesitas Maven: usa `./mvnw`.
    npm run dev                 # http://localhost:5173
    ```
 5. Despliegue en AWS (frontend en EC2-C, BFF en EC2-A, microservicios en EC2-B, detrás de API Gateway): **[docs/04-despliegue-ec2.md](docs/04-despliegue-ec2.md)**.
+   EP5: RabbitMQ en EC2-D/E (`docker-compose.ec2.yml` del repo gestorcitas-rabbitmq) y Kafka en EC2-F (repo gestorcitas-kafka);
+   EC2-B necesita en su `.env` `MQ1_HOST`, `MQ2_HOST` y `KAFKA_HOST` (IPs privadas), ver `.env.example`.
 
 ### Datos de demostración
 
@@ -217,7 +322,8 @@ con y sin token: 401 (sin token o token inválido, API Gateway), 200/201/204 (JS
 
 
 ```bash
-./mvnw clean test          # reglas de negocio (Mockito), contexto JPA (H2) y seguridad del BFF (MockMvc)
+./mvnw clean verify        # reglas de negocio (Mockito), JPA (H2), seguridad del BFF (MockMvc) y Kafka embebido:
+                           # consumo, duplicados, DLT, tópico compactado y API de ms-kafka-admin
 cd frontend && npm run typecheck
 ```
 
@@ -238,3 +344,9 @@ cd frontend && npm run typecheck
 - [x] Productores (ms-citas, ms-usuarios) y consumidores `@RabbitListener` por dominio (ms-notificaciones)
 - [x] ACK manual, reintentos con cola de espera (TTL) y DLQ con registro en logs
 - [x] ms-rabbit-admin: API REST validada para colas, exchanges y bindings (`RabbitAdminService`)
+- [x] RabbitMQ en 2 EC2 (un nodo cada una) con política HA y persistencia en volúmenes; ms-notificaciones guarda lo procesado en Oracle
+- [x] Kafka: 3 Zookeeper + 3 brokers + Kafka UI con Docker Compose en AWS (repo gestorcitas-kafka)
+- [x] Dos tópicos con 3 particiones y 3 réplicas, retención definida y tópicos DLT
+- [x] Productores con clave, JSON y acks=all (ms-citas, ms-usuarios); consumidores `@KafkaListener` con grupos `analitica` e `historial-citas`
+- [x] Manejo explícito de errores (reintentos acotados, DLT, idempotencia) y reacción en tiempo real (vista Analítica)
+- [x] ms-kafka-admin: administración de tópicos y grupos de consumidores (lag, reinicio de offsets)
